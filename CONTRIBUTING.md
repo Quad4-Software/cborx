@@ -16,4 +16,6 @@ mypy strict, ty, and pytest with coverage.
 - No runtime dependencies unless the project genuinely needs one.
 - Source files start with the SPDX license identifier.
 - Public API changes need tests.
-- Commit messages: short, imperative, formal.
+- Commit messages follow conventional commits with a short subject:
+  `feat(scope): ...`, `fix(scope): ...`, `test(scope): ...`,
+  `chore(scope): ...`, `docs(scope): ...`, `perf(scope): ...`.
