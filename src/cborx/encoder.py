@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timezone
 from typing import Any, BinaryIO
 
+from . import _backend
 from ._util import float_min_ai
 from .exceptions import CBOREncodeError
 from .types import CBORSimpleValue, CBORTag, UndefinedType, undefined
@@ -61,8 +62,12 @@ class CBOREncoder:
             # substituted bytes land at the correct position.
             self._write_item(obj, active, 0)
             return
-        buf = bytearray()
+        fast = _backend.fast
         try:
+            if fast is not None:
+                self._fp.write(fast.encode(self, obj))
+                return
+            buf = bytearray()
             self._write_item(obj, buf, 0)
         except RecursionError as e:
             raise CBOREncodeError("object graph too deep to encode") from e
@@ -72,8 +77,8 @@ class CBOREncoder:
         if depth > self._max_depth:
             raise CBOREncodeError("maximum container depth exceeded")
         t = type(obj)
-        # Exact-type checks cover the common cases cheaply; isinstance
-        # fallbacks below handle subclasses.
+        # Exact-type checks cover the common cases cheaply. The
+        # isinstance fallbacks below handle subclasses.
         if t is int:
             self._write_int(obj, buf)
         elif t is str:
@@ -359,21 +364,24 @@ def dumps(
     tag 0 (ISO 8601 text). default handles otherwise unencodable
     objects.
     """
-    fp = io.BytesIO()
     enc = CBOREncoder(
-        fp,
+        io.BytesIO(),
         canonical=canonical,
         indefinite=indefinite,
         datetime_as_timestamp=datetime_as_timestamp,
         default=default,
         max_depth=max_depth,
     )
-    buf = bytearray()
+    fast = _backend.fast
     try:
+        if fast is not None:
+            result: bytes = fast.encode(enc, obj)
+            return result
+        buf = bytearray()
         enc._write_item(obj, buf, 0)
+        return bytes(buf)
     except RecursionError as e:
         raise CBOREncodeError("object graph too deep to encode") from e
-    return bytes(buf)
 
 
 def dump(

@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=68", "cython>=3.0"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "cborx"
 dynamic = ["version"]
-description = "Pure-Python CBOR (RFC 8949) encoder/decoder. No dependencies, no Rust."
+description = "CBOR (RFC 8949) encoder/decoder. Zero dependencies, optional compiled fast path."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "0BSD"
@@ -14,7 +14,6 @@ keywords = ["cbor", "rfc8949", "serialization", "codec", "binary"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Typing :: Typed",
@@ -27,8 +26,17 @@ Repository = "https://github.com/Quad4-Software/cborx"
 Issues = "https://github.com/Quad4-Software/cborx/issues"
 Changelog = "https://github.com/Quad4-Software/cborx/blob/master/CHANGELOG.md"
 
-[tool.hatch.version]
-path = "src/cborx/__init__.py"
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "cborx.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cborx = ["py.typed", "_fast.pyx"]
 
 [dependency-groups]
 dev = [
@@ -39,6 +47,8 @@ dev = [
     "mypy>=2.3.1",
     "hypothesis>=6.168.0",
     "cbor2>=6.1.4,<7",
+    "cython>=3.3.0",
+    "setuptools>=68",
 ]
 
 [tool.ruff]
@@ -87,6 +97,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S603"]
+"setup.py" = ["T201"]
 
 [tool.mypy]
 strict = true

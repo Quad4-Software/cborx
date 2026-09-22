@@ -164,11 +164,25 @@ def test_encode_depth_limit() -> None:
     assert loads(dumps(nested, max_depth=400), max_depth=400) == nested
 
 
-def test_encode_recursion_guard() -> None:
+def test_encode_recursion_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     # With max_depth above the interpreter recursion limit the encoder
     # fails with CBOREncodeError instead of crashing the interpreter.
+    import cborx._backend as backend
+
     nested: Any = 0
     for _ in range(1500):
+        nested = [nested]
+    monkeypatch.setattr(backend, "fast", None)
+    with pytest.raises(CBOREncodeError):
+        dumps(nested, max_depth=10**6)
+    monkeypatch.undo()
+
+    if backend.fast is None:
+        pytest.skip("no compiled backend")
+    # The compiled path encodes 1500-deep natively and must still fail
+    # safely, without a crash, past its internal C stack cap.
+    assert loads(dumps(nested, max_depth=10**6), max_depth=10**6) == nested
+    for _ in range(10000):
         nested = [nested]
     with pytest.raises(CBOREncodeError):
         dumps(nested, max_depth=10**6)
@@ -257,7 +271,7 @@ def test_date_encodes_as_tag_1004() -> None:
 
 
 def test_date_decodes_legacy_and_epoch_forms() -> None:
-    # cborx 0.1.1 emitted tag 1004 with an integer day count; keep
+    # cborx 0.1.1 emitted tag 1004 with an integer day count. Keep
     # accepting that form. Tag 100 is the RFC 8943 epoch-based date.
     assert loads(bytes.fromhex("d903ec01")) == date(1970, 1, 2)
     assert loads(bytes.fromhex("d86401")) == date(1970, 1, 2)

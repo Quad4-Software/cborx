@@ -56,4 +56,15 @@ jobs:
 
       - run: uv python install ${{ matrix.python }}
       - run: uv sync --locked --python ${{ matrix.python }}
-      - run: uv run pytest --cov
+
+      - name: Build accelerator in place
+        run: uv run python setup.py build_ext --inplace
+
+      - name: Verify accelerator built
+        run: uv run python -c "from cborx import _backend; assert _backend.fast is not None, 'extension did not build'"
+
+      - name: Test compiled backend
+        run: uv run pytest
+
+      - name: Test pure-Python backend with coverage
+        run: CBORX_DISABLE_FAST=1 uv run pytest --cov

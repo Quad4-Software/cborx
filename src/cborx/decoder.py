@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from typing import Any, BinaryIO, Literal
 
+from . import _backend
 from ._util import float_min_ai
 from .exceptions import CBORDecodeError
 from .types import CBORSimpleValue, CBORTag, undefined
@@ -78,6 +79,14 @@ class CBORDecoder:
         self._allow_indefinite = allow_indefinite
         self._canonical = canonical
         self._duplicate_keys = duplicate_keys
+        # Packed for the compiled backend so it reads one attribute.
+        self._cfg = (
+            canonical,
+            allow_indefinite,
+            min(max_depth, 2147483647),
+            {"last": 0, "first": 1, "error": 2}[duplicate_keys],
+            strict_utf8,
+        )
 
     def decode(
         self, data: bytes | bytearray | memoryview, *, allow_trailing: bool = False
@@ -96,6 +105,11 @@ class CBORDecoder:
         self, data: bytes | bytearray | memoryview, pos: int = 0
     ) -> tuple[Any, int]:
         """Decode one data item starting at pos and return (value, new pos)."""
+        if _backend.fast is not None:
+            result: tuple[Any, int] = _backend.fast.decode_item(self, data, pos)
+            return result
+        if pos < 0:
+            raise CBORDecodeError("unexpected end of input")
         if not isinstance(data, bytes):
             data = bytes(data)
         n = len(data)
@@ -342,7 +356,7 @@ class CBORDecoder:
         if ai < 20:
             return CBORSimpleValue(ai), pos
         if ai < 24:
-            # decode_item handles heads 0xF4..0xF7 inline; these only
+            # decode_item handles heads 0xF4..0xF7 inline. These only
             # matter if this helper is ever called directly.
             return (False, True, None, undefined)[ai - 20], pos  # pragma: no cover
         if ai == 24:
@@ -505,6 +519,9 @@ _TAG_DECODERS: dict[int, Callable[[Any], Any]] = {
 }
 
 
+_DEFAULT_DECODER: "CBORDecoder | None" = None
+
+
 def loads(
     data: bytes | bytearray | memoryview,
     *,
@@ -523,14 +540,29 @@ def loads(
     keys are rejected. duplicate_keys selects "last" (keep the last
     value), "first" or "error" handling for repeated map keys.
     """
-    return CBORDecoder(
-        tag_hook=tag_hook,
-        strict_utf8=strict_utf8,
-        max_depth=max_depth,
-        allow_indefinite=allow_indefinite,
-        canonical=canonical,
-        duplicate_keys=duplicate_keys,
-    ).decode(data, allow_trailing=allow_trailing)
+    global _DEFAULT_DECODER
+    if (
+        tag_hook is None
+        and strict_utf8
+        and max_depth == 200
+        and allow_indefinite
+        and not canonical
+        and duplicate_keys == "last"
+    ):
+        # Decoders hold no per-call state, so a shared instance is safe.
+        dec = _DEFAULT_DECODER
+        if dec is None:
+            dec = _DEFAULT_DECODER = CBORDecoder()
+    else:
+        dec = CBORDecoder(
+            tag_hook=tag_hook,
+            strict_utf8=strict_utf8,
+            max_depth=max_depth,
+            allow_indefinite=allow_indefinite,
+            canonical=canonical,
+            duplicate_keys=duplicate_keys,
+        )
+    return dec.decode(data, allow_trailing=allow_trailing)
 
 
 def load(

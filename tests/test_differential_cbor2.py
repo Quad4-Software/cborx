@@ -349,6 +349,12 @@ _C2_SEMANTIC_TAGS = {
     55799,
 }
 
+# Tags both libraries resolve semantically. For anything else in
+# _C2_SEMANTIC_TAGS cbor2 decodes to a Python object while cborx keeps
+# CBORTag, so a decoded-value mismatch is expected.
+_SHARED_SEMANTIC = {0, 1, 2, 3, 100, 1004, 55799}
+_C2_ONLY_SEMANTIC = _C2_SEMANTIC_TAGS - _SHARED_SEMANTIC
+
 # Tags cborx resolves semantically that cbor2 leaves as CBORTag.
 _X_ONLY_SEMANTIC = {32}
 
@@ -377,7 +383,7 @@ def _wire_tags(data: bytes) -> set[int]:
 def _only_cborx_ok(data: bytes, theirs_err: str) -> None:
     """Assert that a cborx-accepts/cbor2-rejects split is legitimate."""
     if "two-byte sequence for simple value" in theirs_err:
-        # cbor2 rejects non-minimal two-byte simple values; cborx
+        # cbor2 rejects non-minimal two-byte simple values. cborx
         # accepts them in lax mode like other non-minimal encodings.
         return
     # Otherwise a cbor2 built-in semantic decoder must have rejected
@@ -424,11 +430,11 @@ def _assert_decode_agreement(data: bytes) -> None:
         return
 
     if ours_ok and _norm(ours) != _norm(theirs):
-        # cbor2 unwraps shareable, sharedref and string-concat tags.
-        # The URI tag resolves to str in cborx but stays a CBORTag in
-        # cbor2.
+        # cbor2 unwraps shareable, sharedref and string-concat tags and
+        # resolves extra tags to Python objects. The URI tag resolves
+        # to str in cborx but stays a CBORTag in cbor2.
         wire = _wire_tags(data)
-        assert wire & (_C2_UNWRAP_TAGS | _X_ONLY_SEMANTIC), (
+        assert wire & (_C2_UNWRAP_TAGS | _X_ONLY_SEMANTIC | _C2_ONLY_SEMANTIC), (
             f"decode mismatch on {data.hex()}: {ours!r} vs {theirs!r}"
         )
 

@@ -2,16 +2,21 @@
 
 ## [0.1.2] - Unreleased
 
-Correctness fixes found by differential testing against cbor2, plus a
-performance pass on the encoder and decoder hot paths.
+Optional Cython accelerator, correctness fixes found by differential
+testing against cbor2, and a performance pass on the encoder and
+decoder hot paths.
 
-Performance: encoding is roughly 1.4x to 3.2x faster and decoding 1.1x
-to 2.2x faster than 0.1.1 depending on payload shape. The decoder now
-works directly on bytes instead of a memoryview, inlines the common
-one-byte head forms and uses precompiled struct formats for multi-byte
-arguments. The encoder dispatches on exact types before falling back to
-isinstance checks and no longer wraps stream writes in an extra call
-layer. Output bytes are unchanged.
+Performance: wheels now ship a compiled `_fast` extension used for all
+supported operations. On local benchmarks against cbor2's native
+extension, encoding is 1.5x to 11x faster and decoding is on par to
+1.9x faster depending on payload shape. When no compiler or wheel is
+available the package falls back to the pure-Python codec with
+identical behavior. Set CBORX_DISABLE_FAST=1 to force the fallback.
+The pure path also gained the optimizations described below: the
+decoder works directly on bytes instead of a memoryview, inlines the
+common one-byte head forms and uses precompiled struct formats for
+multi-byte arguments, and the encoder dispatches on exact types before
+falling back to isinstance checks. Output bytes are unchanged.
 
 Correctness fixes:
 

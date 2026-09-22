@@ -6,13 +6,15 @@
 [![PyPI](https://img.shields.io/pypi/v/cborx)](https://pypi.org/project/cborx/)
 [![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue)](LICENSE)
 
-Pure-Python CBOR (RFC 8949) encoder/decoder. No dependencies, no Rust.
+CBOR (RFC 8949) encoder/decoder for Python. Zero runtime dependencies.
 
-A hardened, fully typed replacement for cbor2 without a native
-extension. The decoder is iterative, bounds every claimed length
-against the remaining input, and enforces a configurable nesting
-limit, so hostile input fails fast instead of exhausting memory or
-the call stack.
+A hardened, fully typed replacement for cbor2. Wheels ship an optional
+Cython accelerator that outperforms cbor2's native extension on encode
+and most decode workloads, and every install falls back to a portable
+pure-Python implementation with identical behavior. The decoder is
+iterative, bounds every claimed length against the remaining input,
+and enforces a configurable nesting limit, so hostile input fails fast
+instead of exhausting memory or the call stack.
 
 ## Install
 

@@ -10,7 +10,9 @@ lint:
 	uvx ty check src tests
 
 test:
-	uv run pytest --cov --cov-report=term-missing
+	uv run python setup.py build_ext --inplace
+	uv run pytest
+	CBORX_DISABLE_FAST=1 uv run pytest --cov --cov-report=term-missing
 
 build:
 	uv build
