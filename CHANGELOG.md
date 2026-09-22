@@ -8,8 +8,9 @@ decoder hot paths.
 
 Performance: wheels now ship a compiled `_fast` extension used for all
 supported operations. On local benchmarks against cbor2's native
-extension, encoding is 1.5x to 11x faster and decoding is on par to
-1.9x faster depending on payload shape. When no compiler or wheel is
+extension, encoding is 1.2x to 11x faster and decoding is on par to
+2x faster depending on payload shape, with byte-identical output. When
+no compiler or wheel is
 available the package falls back to the pure-Python codec with
 identical behavior. Set CBORX_DISABLE_FAST=1 to force the fallback.
 The pure path also gained the optimizations described below: the
@@ -28,6 +29,10 @@ Correctness fixes:
 - NaN always encodes as the preferred form 0xf97e00. Infinity uses
   float16 and other floats use float64 in non-canonical mode, matching
   cbor2.
+- The accelerator clamps declared array and map counts that exceed the
+  remaining input, fixing an item-counter overflow that could crash on
+  hostile length fields. Found by bit-flip fuzzing, covered by a
+  regression test.
 
 Added a cbor2 differential test suite: byte-identical canonical and
 default encodings, cross-decoding in both directions, decode agreement
