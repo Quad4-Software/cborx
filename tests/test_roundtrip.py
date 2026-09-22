@@ -10,7 +10,7 @@ from hypothesis import strategies as st
 from cborx import CBORSimpleValue, CBORTag, dumps, loads, undefined
 from tests.util import same
 
-_BUILTIN_TAGS = {0, 1, 2, 3, 32, 1004, 55799}
+_BUILTIN_TAGS = {0, 1, 2, 3, 32, 100, 1004, 55799}
 
 # Fixed-offset timezones only: zoneinfo datetimes near DST gaps have
 # surprising equality semantics in CPython itself, unrelated to CBOR.

@@ -2,6 +2,7 @@
 """CBOR encoder (RFC 8949)."""
 
 import io
+import math
 import struct
 from collections.abc import Callable
 from datetime import date, datetime, timezone
@@ -143,7 +144,18 @@ class CBOREncoder:
                 self._write_bytes(_to_bignum(magnitude), buf)
 
     def _write_float(self, value: float, buf: bytearray) -> None:
-        ai = float_min_ai(value) if self._canonical else 27
+        # NaN is always the RFC 8949 preferred form 0xf97e00: sign and
+        # payload bits do not survive a float round trip anyway.
+        # Non-canonical output uses float64 otherwise, except that
+        # infinity uses float16 for compatibility with cbor2.
+        if math.isnan(value):
+            buf += b"\xf9\x7e\x00"
+            return
+        ai = (
+            float_min_ai(value)
+            if self._canonical
+            else (25 if math.isinf(value) else 27)
+        )
         if ai == 25:
             buf.append(0xF9)
             buf += struct.pack(">e", value)
@@ -216,9 +228,9 @@ class CBOREncoder:
         self._encode(text, buf, depth + 1)
 
     def _write_date(self, obj: date, buf: bytearray, depth: int) -> None:
-        # RFC 8949 calendar date: tag 1004, days since 1970-01-01.
+        # RFC 8943 calendar date: tag 1004 wrapping an RFC 3339 date string.
         self._write_head(buf, 6, 1004)
-        self._encode((obj - _EPOCH_DATE).days, buf, depth + 1)
+        self._encode(obj.isoformat(), buf, depth + 1)
 
     def _write_array(
         self, obj: list[Any] | tuple[Any, ...], buf: bytearray, depth: int

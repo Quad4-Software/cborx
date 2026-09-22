@@ -250,9 +250,17 @@ def test_datetime_as_timestamp_naive_is_utc() -> None:
 
 
 def test_date_encodes_as_tag_1004() -> None:
-    assert dumps(date(1970, 1, 2)) == bytes.fromhex("d903ec01")
-    assert loads(bytes.fromhex("d903ec01")) == date(1970, 1, 2)
+    # RFC 8943: tag 1004 wraps an RFC 3339 full-date text string.
+    assert dumps(date(1970, 1, 2)) == bytes.fromhex("d903ec6a313937302d30312d3032")
+    assert loads(bytes.fromhex("d903ec6a313937302d30312d3032")) == date(1970, 1, 2)
     assert loads(dumps(date(1960, 5, 4))) == date(1960, 5, 4)
+
+
+def test_date_decodes_legacy_and_epoch_forms() -> None:
+    # cborx 0.1.1 emitted tag 1004 with an integer day count; keep
+    # accepting that form. Tag 100 is the RFC 8943 epoch-based date.
+    assert loads(bytes.fromhex("d903ec01")) == date(1970, 1, 2)
+    assert loads(bytes.fromhex("d86401")) == date(1970, 1, 2)
 
 
 def test_uri_tag_decodes_to_str() -> None:

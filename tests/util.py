@@ -10,12 +10,9 @@ from cborx import CBORTag
 def same(a: Any, b: Any) -> bool:
     """Structural equality that treats NaN as equal to NaN."""
     if isinstance(a, float) and isinstance(b, float):
+        # NaN carries no meaningful sign or payload after encoding.
         if math.isnan(a) or math.isnan(b):
-            return (
-                math.isnan(a)
-                and math.isnan(b)
-                and math.copysign(1.0, a) == math.copysign(1.0, b)
-            )
+            return math.isnan(a) and math.isnan(b)
         return a == b and math.copysign(1.0, a) == math.copysign(1.0, b)
     if isinstance(a, CBORTag) and isinstance(b, CBORTag):
         return a.tag == b.tag and same(a.value, b.value)
@@ -24,10 +21,19 @@ def same(a: Any, b: Any) -> bool:
     if isinstance(a, dict) and isinstance(b, dict):
         if len(a) != len(b):
             return False
+        unmatched = list(b.items())
         for key, value in a.items():
-            matches = [bk for bk in b if same(key, bk)]
-            if len(matches) != 1 or not same(value, b[matches[0]]):
+            hit = next(
+                (
+                    i
+                    for i, (bk, bv) in enumerate(unmatched)
+                    if same(key, bk) and same(value, bv)
+                ),
+                None,
+            )
+            if hit is None:
                 return False
+            unmatched.pop(hit)
         return True
     if type(a) is not type(b):
         return False

@@ -4,6 +4,7 @@
 import struct
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
+from functools import partial
 from typing import Any, BinaryIO, Literal
 
 from ._util import float_min_ai
@@ -267,6 +268,8 @@ class CBORDecoder:
             pos += 1
             if self._canonical and value < 24:
                 raise CBORDecodeError("non-minimal simple value encoding")
+            if 24 <= value <= 31:
+                raise CBORDecodeError("reserved simple value")
             if value == 20:
                 return False, start, pos
             if value == 21:
@@ -345,14 +348,6 @@ class CBORDecoder:
     def _apply_tag(self, tag: int, value: Any) -> Any:
         if self._tag_hook is not None:
             return self._tag_hook(self, CBORTag(tag, value))
-        if tag == 0:
-            return _decode_datetime(value)
-        if tag == 1:
-            return _decode_epoch(value)
-        if tag == 2:
-            return _decode_bignum(value, negative=False)
-        if tag == 3:
-            return _decode_bignum(value, negative=True)
         if tag == 32:
             # URI: returned as a plain str, since Python has no URI scalar type.
             if not isinstance(value, str):
@@ -361,8 +356,9 @@ class CBORDecoder:
         if tag == 55799:
             # Self-described CBOR: pass the enclosed item through.
             return value
-        if tag == 1004:
-            return _decode_tag_date(value)
+        handler = _TAG_DECODERS.get(tag)
+        if handler is not None:
+            return handler(value)
         return CBORTag(tag, value)
 
 
@@ -393,12 +389,36 @@ def _decode_bignum(value: Any, *, negative: bool) -> int:
 
 
 def _decode_tag_date(value: Any) -> date:
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as e:
+            raise CBORDecodeError(f"malformed tag 1004 date string {value!r}") from e
     if isinstance(value, bool) or not isinstance(value, int):
-        raise CBORDecodeError("tag 1004 must wrap an integer day count")
+        raise CBORDecodeError("tag 1004 must wrap a text string")
     try:
         return _EPOCH_DATE + timedelta(days=value)
     except OverflowError as e:
         raise CBORDecodeError(f"tag 1004 day count {value} out of range") from e
+
+
+def _decode_epoch_date(value: Any) -> date:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CBORDecodeError("tag 100 must wrap an integer day count")
+    try:
+        return _EPOCH_DATE + timedelta(days=value)
+    except OverflowError as e:
+        raise CBORDecodeError(f"tag 100 day count {value} out of range") from e
+
+
+_TAG_DECODERS: dict[int, Callable[[Any], Any]] = {
+    0: _decode_datetime,
+    1: _decode_epoch,
+    2: partial(_decode_bignum, negative=False),
+    3: partial(_decode_bignum, negative=True),
+    100: _decode_epoch_date,
+    1004: _decode_tag_date,
+}
 
 
 def loads(

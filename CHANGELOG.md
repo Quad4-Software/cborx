@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.2] - Unreleased
+
+Correctness fixes found by differential testing against cbor2.
+
+- `date` now encodes as tag 1004 wrapping an RFC 3339 text string per
+  RFC 8943, matching cbor2. The integer day-count form emitted by
+  0.1.1 still decodes, and tag 100 (epoch-based date) now decodes to
+  `date` as well.
+- The decoder rejects reserved simple values 24 through 31.
+- NaN always encodes as the preferred form 0xf97e00. Infinity uses
+  float16 and other floats use float64 in non-canonical mode, matching
+  cbor2.
+
+Added a cbor2 differential test suite: byte-identical canonical and
+default encodings, cross-decoding in both directions, decode agreement
+on random and mutated inputs, indefinite-length interoperability and
+documented divergence coverage. cbor2 is a dev-only dependency.
+
 ## [0.1.1] - Unreleased
 
 Fix the release workflow's package-name placeholder. No library
