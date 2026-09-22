@@ -48,7 +48,10 @@ from libc.math cimport isinf, isnan
 from libc.stdint cimport uint64_t
 from libc.string cimport memcpy
 
-cdef extern from "Python.h":
+# PyFloat_Pack/Unpack only became public API in 3.11. On 3.10
+# libpython exports them under the internal _Py names, which the
+# local shim header aliases.
+cdef extern from "_fastshim.h":
     int PyFloat_Pack2(double x, char *p, int le)
     int PyFloat_Pack4(double x, char *p, int le)
     int PyFloat_Pack8(double x, char *p, int le)

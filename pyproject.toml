@@ -36,7 +36,7 @@ version = {attr = "cborx.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-cborx = ["py.typed", "_fast.pyx"]
+cborx = ["py.typed", "_fast.pyx", "_fastshim.h"]
 
 [dependency-groups]
 dev = [

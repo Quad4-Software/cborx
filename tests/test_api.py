@@ -180,8 +180,15 @@ def test_encode_recursion_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     if backend.fast is None:
         pytest.skip("no compiled backend")
     # The compiled path encodes 1500-deep natively and must still fail
-    # safely, without a crash, past its internal C stack cap.
-    assert loads(dumps(nested, max_depth=10**6), max_depth=10**6) == nested
+    # safely, without a crash, past its internal C stack cap. Comparing
+    # the whole graph with == would itself exceed the recursion limit,
+    # so walk it iteratively instead.
+    val = loads(dumps(nested, max_depth=10**6), max_depth=10**6)
+    depth = 0
+    while isinstance(val, list):
+        val = val[0]
+        depth += 1
+    assert (val, depth) == (0, 1500)
     for _ in range(10000):
         nested = [nested]
     with pytest.raises(CBOREncodeError):
