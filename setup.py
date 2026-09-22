@@ -10,11 +10,7 @@ import sys
 from pathlib import Path
 
 from setuptools import Extension, setup
-from setuptools._distutils.errors import (
-    CCompilerError,
-    DistutilsExecError,
-    DistutilsPlatformError,
-)
+from setuptools._distutils.errors import DistutilsPlatformError
 from setuptools.command.build_ext import build_ext
 
 
@@ -31,13 +27,11 @@ class OptionalBuildExt(build_ext):
     def build_extension(self, ext):
         try:
             super().build_extension(ext)
-        except (
-            CCompilerError,
-            DistutilsExecError,
-            DistutilsPlatformError,
-            ValueError,
-            OSError,
-        ) as e:
+        except Exception as e:  # noqa: BLE001
+            # Any compile failure (missing compiler, bad flags, target
+            # mismatch) must degrade to the pure-Python install, not
+            # abort it. The exception family varies by platform, so a
+            # broad catch is intentional.
             print(
                 f"cborx: _fast extension failed, using pure Python: {e}",
                 file=sys.stderr,
@@ -45,6 +39,11 @@ class OptionalBuildExt(build_ext):
 
 
 def _extensions():
+    if sys.implementation.name != "cpython":
+        # The accelerator targets the CPython API. PyPy's cpyext layer
+        # cannot handle its recursion depth safely, and the pure codec
+        # is faster under the JIT anyway.
+        return []
     pyx = "src/cborx/_fast.pyx"
     try:
         from Cython.Build import cythonize
@@ -55,7 +54,12 @@ def _extensions():
         return []
     return cythonize(
         [Extension("cborx._fast", [pyx])],
-        compiler_directives={"language_level": "3"},
+        compiler_directives={
+            "language_level": "3",
+            # The module holds no shared mutable state, so it is safe
+            # to run with the GIL disabled on free-threaded builds.
+            "freethreading_compatible": True,
+        },
     )
 
 
