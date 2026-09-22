@@ -372,3 +372,112 @@ def test_indefinite_encoding() -> None:
         dumps(obj, canonical=True, indefinite=True)
     with pytest.raises(CBORDecodeError):
         loads(encoded, canonical=True)
+
+
+class _Int(int):
+    __slots__ = ()
+
+
+class _Str(str):
+    __slots__ = ()
+
+
+class _Float(float):
+    __slots__ = ()
+
+
+class _Bytes(bytes):
+    __slots__ = ()
+
+
+class _UInt(int):
+    __slots__ = ()
+
+
+class _List(list[Any]):
+    pass
+
+
+class _Dict(dict[Any, Any]):
+    pass
+
+
+class _DateTime(datetime):
+    pass
+
+
+class _Date(date):
+    pass
+
+
+class _Tag(CBORTag):
+    pass
+
+
+class _Simple(CBORSimpleValue):
+    pass
+
+
+class _Undef(UndefinedType):
+    pass
+
+
+def test_builtin_subclasses_encode_like_base() -> None:
+    obj = {
+        _Str("k"): [
+            _Int(5),
+            _Float(1.5),
+            _Bytes(b"b"),
+            _UInt(1),
+            _List([1]),
+            _Dict({"x": 2}),
+            _DateTime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+            _Date(2024, 1, 2),
+            _Tag(1, 0),
+            _Simple(33),
+            _Undef(),
+        ]
+    }
+    assert dumps(obj) == dumps(
+        {
+            "k": [
+                5,
+                1.5,
+                b"b",
+                1,
+                [1],
+                {"x": 2},
+                datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+                date(2024, 1, 2),
+                CBORTag(1, 0),
+                CBORSimpleValue(33),
+                undefined,
+            ]
+        }
+    )
+
+
+def test_encode_recursion_limit_maps_to_encode_error() -> None:
+    deep: Any = []
+    for _ in range(5000):
+        deep = [deep]
+    enc = CBOREncoder(io.BytesIO(), max_depth=100000)
+    with pytest.raises(CBOREncodeError, match="too deep"):
+        enc.encode(deep)
+    with pytest.raises(CBOREncodeError, match="too deep"):
+        dumps(deep, max_depth=100000)
+
+
+def test_canonical_map_with_many_keys() -> None:
+    obj = {f"k{i:02d}": i for i in range(30)}
+    encoded = dumps(obj, canonical=True)
+    # 30 entries: the map header itself needs a multi-byte length.
+    assert encoded[0] == 0xB8
+    assert loads(encoded, canonical=True) == obj
+
+
+def test_small_simple_values_decode() -> None:
+    for v in range(20):
+        assert loads(bytes((0xE0 | v,))) == CBORSimpleValue(v)
+    assert loads(b"\xf8\x20") == CBORSimpleValue(32)
+    assert loads(b"\xf8\x14") is False

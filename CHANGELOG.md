@@ -2,7 +2,18 @@
 
 ## [0.1.2] - Unreleased
 
-Correctness fixes found by differential testing against cbor2.
+Correctness fixes found by differential testing against cbor2, plus a
+performance pass on the encoder and decoder hot paths.
+
+Performance: encoding is roughly 1.4x to 3.2x faster and decoding 1.1x
+to 2.2x faster than 0.1.1 depending on payload shape. The decoder now
+works directly on bytes instead of a memoryview, inlines the common
+one-byte head forms and uses precompiled struct formats for multi-byte
+arguments. The encoder dispatches on exact types before falling back to
+isinstance checks and no longer wraps stream writes in an extra call
+layer. Output bytes are unchanged.
+
+Correctness fixes:
 
 - `date` now encodes as tag 1004 wrapping an RFC 3339 text string per
   RFC 8943, matching cbor2. The integer day-count form emitted by

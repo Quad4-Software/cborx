@@ -23,11 +23,16 @@ DuplicateMode = Literal["last", "first", "error"]
 _MISSING = object()
 _ARR, _MAP, _TAG = 0, 1, 2
 
-_FLOAT_FORMATS: dict[int, tuple[int, str]] = {
-    25: (2, ">e"),
-    26: (4, ">f"),
-    27: (8, ">d"),
-}
+_U16 = struct.Struct(">H")
+_U32 = struct.Struct(">I")
+_U64 = struct.Struct(">Q")
+_F16 = struct.Struct(">e")
+_F32 = struct.Struct(">f")
+_F64 = struct.Struct(">d")
+
+_ARG_UNPACK: dict[int, struct.Struct] = {2: _U16, 4: _U32, 8: _U64}
+_FLOAT_UNPACK: dict[int, struct.Struct] = {25: _F16, 26: _F32, 27: _F64}
+_FLOAT_SIZES = {25: 2, 26: 4, 27: 8}
 _MINIMAL_ARG = {1: 24, 2: 0x100, 4: 0x10000, 8: 0x100000000}
 _EPOCH_DATE = date(1970, 1, 1)
 
@@ -87,20 +92,91 @@ class CBORDecoder:
             raise CBORDecodeError(f"trailing data at offset {pos}")
         return value
 
-    def decode_item(
+    def decode_item(  # noqa: C901
         self, data: bytes | bytearray | memoryview, pos: int = 0
     ) -> tuple[Any, int]:
         """Decode one data item starting at pos and return (value, new pos)."""
-        mv = data if isinstance(data, memoryview) else memoryview(data)
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        n = len(data)
         frames: list[_Frame] = []
+        read_one = self._read_one
+        read_arg = self._read_arg
+        canonical = self._canonical
+        utf8_errors = self._utf8_errors
         value: Any = _MISSING
         start = end = pos
         while True:
             if value is _MISSING:
-                value, start, end = self._read_one(mv, pos, frames)
-                pos = end
-                if value is _MISSING:
-                    continue  # a container or tag frame was pushed
+                start = pos
+                # Inline the dominant forms so common scalars and short
+                # strings skip the _read_one call entirely.
+                if pos >= n:
+                    raise CBORDecodeError("unexpected end of input")
+                head = data[pos]
+                if head < 0x18:
+                    pos += 1
+                    end = pos
+                    value = head
+                elif 0x20 <= head < 0x38:
+                    pos += 1
+                    end = pos
+                    value = -1 - (head & 0x1F)
+                elif 0x40 <= head < 0x58:
+                    arg = head & 0x1F
+                    pos += 1
+                    if arg > n - pos:
+                        raise CBORDecodeError(
+                            f"declared length {arg} exceeds {n - pos} "
+                            f"remaining bytes at offset {start}"
+                        )
+                    value = data[pos : pos + arg]
+                    pos += arg
+                    end = pos
+                elif 0x60 <= head < 0x78:
+                    arg = head & 0x1F
+                    pos += 1
+                    if arg > n - pos:
+                        raise CBORDecodeError(
+                            f"declared length {arg} exceeds {n - pos} "
+                            f"remaining bytes at offset {start}"
+                        )
+                    try:
+                        value = data[pos : pos + arg].decode("utf-8", utf8_errors)
+                    except UnicodeDecodeError as e:
+                        raise CBORDecodeError("invalid UTF-8 in text string") from e
+                    pos += arg
+                    end = pos
+                elif head < 0x1C:
+                    pos += 1
+                    value, pos = read_arg(data, pos, n, head)
+                    end = pos
+                elif 0x38 <= head < 0x3C:
+                    pos += 1
+                    arg, pos = read_arg(data, pos, n, head & 0x1F)
+                    end = pos
+                    value = -1 - arg
+                elif head == 0xF4:
+                    pos += 1
+                    end = pos
+                    value = False
+                elif head == 0xF5:
+                    pos += 1
+                    end = pos
+                    value = True
+                elif head == 0xF6:
+                    pos += 1
+                    end = pos
+                    value = None
+                elif head == 0xF7:
+                    pos += 1
+                    end = pos
+                    value = undefined
+                else:
+                    value, end = read_one(data, pos, n, frames)
+                    pos = end
+                    if value is _MISSING:
+                        continue  # a container or tag frame was pushed
             while value is not _MISSING:
                 if not frames:
                     return value, end
@@ -110,8 +186,8 @@ class CBORDecoder:
                     value = self._apply_tag(frame.tag, value)
                     start = frame.start
                     continue
-                if frame.kind == _MAP and len(frame.items) % 2 == 0 and self._canonical:
-                    self._check_key_order(mv, frame, start, end)
+                if canonical and frame.kind == _MAP and not len(frame.items) % 2:
+                    self._check_key_order(data, frame, start, end)
                 frame.items.append(value)
                 if frame.remaining > 0:
                     frame.remaining -= 1
@@ -123,51 +199,55 @@ class CBORDecoder:
                 value = _MISSING
 
     @staticmethod
-    def _check_key_order(mv: memoryview, frame: _Frame, start: int, end: int) -> None:
-        key = bytes(mv[start:end])
+    def _check_key_order(data: bytes, frame: _Frame, start: int, end: int) -> None:
+        key = data[start:end]
         prev = frame.prev_key
         if prev is not None and (len(key), key) <= (len(prev), prev):
             raise CBORDecodeError("map keys are not in canonical order")
         frame.prev_key = key
 
     def _read_one(
-        self, mv: memoryview, pos: int, frames: list[_Frame]
-    ) -> tuple[Any, int, int]:
-        """Read one item header and return (value or _MISSING, start, end)."""
+        self, data: bytes, pos: int, n: int, frames: list[_Frame]
+    ) -> tuple[Any, int]:
+        """Read one item and return (value or _MISSING, end).
+
+        Only called for heads outside the decode_item fast path, so
+        major types 0 and 1 and ai 20..23 cannot reach this point.
+        """
         start = pos
-        if pos >= len(mv):
-            raise CBORDecodeError("unexpected end of input")
-        head = mv[pos]
+        head = data[pos]
         pos += 1
         major = head >> 5
         ai = head & 0x1F
         if ai == 0x1F:
-            return self._read_indefinite(mv, pos, start, major, frames)
+            return self._read_indefinite(data, pos, n, start, major, frames)
         if ai > 0x1B:
             raise CBORDecodeError(
                 f"reserved additional information {ai} at offset {start}"
             )
         if major == 7:
-            return self._read_simple_or_float(mv, pos, start, ai)
-        arg, pos = self._read_arg(mv, pos, ai)
-        if major == 0:
-            return arg, start, pos
-        if major == 1:
-            return -1 - arg, start, pos
+            return self._read_simple_or_float(data, pos, n, start, ai)
+        arg, pos = self._read_arg(data, pos, n, ai)
         if major == 2 or major == 3:
-            return self._read_string(mv, pos, start, major, arg)
+            return self._read_string(data, pos, n, start, major, arg)
         return self._open_container(pos, start, major, arg, frames)
 
     def _read_indefinite(
-        self, mv: memoryview, pos: int, start: int, major: int, frames: list[_Frame]
-    ) -> tuple[Any, int, int]:
+        self,
+        data: bytes,
+        pos: int,
+        n: int,
+        start: int,
+        major: int,
+        frames: list[_Frame],
+    ) -> tuple[Any, int]:
         if major == 7:
             # Break byte: only valid closing an indefinite container.
             if frames and frames[-1].remaining == -1:
                 frame = frames.pop()
                 if frame.kind == _MAP and len(frame.items) % 2 != 0:
                     raise CBORDecodeError("indefinite-length map has an odd item count")
-                return self._finish(frame), frame.start, pos
+                return self._finish(frame), pos
             raise CBORDecodeError(
                 f"break byte outside indefinite-length item at offset {start}"
             )
@@ -185,50 +265,56 @@ class CBORDecoder:
                 f"indefinite-length item is not canonical at offset {start}"
             )
         if major in (2, 3):
-            return self._read_indef_string(mv, pos, start, major)
+            return self._read_indef_string(data, pos, n, start, major)
         if len(frames) >= self._max_depth:
             raise CBORDecodeError(
                 f"maximum depth {self._max_depth} exceeded at offset {start}"
             )
         frames.append(_Frame(_ARR if major == 4 else _MAP, -1, start))
-        return _MISSING, start, pos
+        return _MISSING, pos
 
-    def _read_arg(self, mv: memoryview, pos: int, ai: int) -> tuple[int, int]:
+    def _read_arg(self, data: bytes, pos: int, n: int, ai: int) -> tuple[int, int]:
         if ai < 24:
             return ai, pos
         nbytes = 1 << (ai - 24)  # ai 24..27 gives 1, 2, 4, 8
-        if pos + nbytes > len(mv):
+        if pos + nbytes > n:
             raise CBORDecodeError("truncated integer argument")
-        arg = int.from_bytes(mv[pos : pos + nbytes], "big")
+        if nbytes == 1:
+            arg = data[pos]
+        else:
+            arg = _ARG_UNPACK[nbytes].unpack_from(data, pos)[0]
         pos += nbytes
         if self._canonical and arg < _MINIMAL_ARG[nbytes]:
             raise CBORDecodeError("non-minimal integer encoding")
         return arg, pos
 
     def _read_string(
-        self, mv: memoryview, pos: int, start: int, major: int, arg: int
-    ) -> tuple[Any, int, int]:
+        self, data: bytes, pos: int, n: int, start: int, major: int, arg: int
+    ) -> tuple[Any, int]:
         # Check the declared length against remaining input before
         # touching it, so a forged huge length fails cheaply.
-        if arg > len(mv) - pos:
+        if arg > n - pos:
             raise CBORDecodeError(
-                f"declared length {arg} exceeds {len(mv) - pos} "
+                f"declared length {arg} exceeds {n - pos} "
                 f"remaining bytes at offset {start}"
             )
-        raw = bytes(mv[pos : pos + arg])
+        raw = data[pos : pos + arg]
         pos += arg
         if major == 2:
-            return raw, start, pos
-        return self._decode_text(raw), start, pos
+            return raw, pos
+        try:
+            return raw.decode("utf-8", self._utf8_errors), pos
+        except UnicodeDecodeError as e:
+            raise CBORDecodeError("invalid UTF-8 in text string") from e
 
     def _read_indef_string(
-        self, mv: memoryview, pos: int, start: int, major: int
-    ) -> tuple[Any, int, int]:
+        self, data: bytes, pos: int, n: int, start: int, major: int
+    ) -> tuple[Any, int]:
         parts: list[bytes] = []
         while True:
-            if pos >= len(mv):
+            if pos >= n:
                 raise CBORDecodeError("unterminated indefinite-length string")
-            head = mv[pos]
+            head = data[pos]
             pos += 1
             if head == 0xFF:
                 break
@@ -239,63 +325,61 @@ class CBORDecoder:
                 raise CBORDecodeError(
                     "invalid chunk header in indefinite-length string"
                 )
-            arg, pos = self._read_arg(mv, pos, ai)
-            if arg > len(mv) - pos:
+            arg, pos = self._read_arg(data, pos, n, ai)
+            if arg > n - pos:
                 raise CBORDecodeError("declared chunk length exceeds remaining input")
-            parts.append(bytes(mv[pos : pos + arg]))
+            parts.append(data[pos : pos + arg])
             pos += arg
         if major == 2:
-            return b"".join(parts), start, pos
-        return "".join(self._decode_text(chunk) for chunk in parts), start, pos
+            return b"".join(parts), pos
+        # Each chunk must be well-formed UTF-8 on its own: a split
+        # sequence across a chunk boundary is invalid.
+        return "".join(self._decode_text(chunk) for chunk in parts), pos
 
     def _read_simple_or_float(  # noqa: C901
-        self, mv: memoryview, pos: int, start: int, ai: int
-    ) -> tuple[Any, int, int]:
+        self, data: bytes, pos: int, n: int, start: int, ai: int
+    ) -> tuple[Any, int]:
         if ai < 20:
-            return CBORSimpleValue(ai), start, pos
-        if ai == 20:
-            return False, start, pos
-        if ai == 21:
-            return True, start, pos
-        if ai == 22:
-            return None, start, pos
-        if ai == 23:
-            return undefined, start, pos
+            return CBORSimpleValue(ai), pos
+        if ai < 24:
+            # decode_item handles heads 0xF4..0xF7 inline; these only
+            # matter if this helper is ever called directly.
+            return (False, True, None, undefined)[ai - 20], pos  # pragma: no cover
         if ai == 24:
-            if pos >= len(mv):
+            if pos >= n:
                 raise CBORDecodeError("truncated simple value")
-            value = mv[pos]
+            value = data[pos]
             pos += 1
             if self._canonical and value < 24:
                 raise CBORDecodeError("non-minimal simple value encoding")
             if 24 <= value <= 31:
                 raise CBORDecodeError("reserved simple value")
             if value == 20:
-                return False, start, pos
+                return False, pos
             if value == 21:
-                return True, start, pos
+                return True, pos
             if value == 22:
-                return None, start, pos
+                return None, pos
             if value == 23:
-                return undefined, start, pos
-            return CBORSimpleValue(value), start, pos
-        nbytes, fmt = _FLOAT_FORMATS[ai]
-        if pos + nbytes > len(mv):
+                return undefined, pos
+            return CBORSimpleValue(value), pos
+        nbytes = _FLOAT_SIZES[ai]
+        if pos + nbytes > n:
             raise CBORDecodeError("truncated float")
-        fval = float(struct.unpack(fmt, mv[pos : pos + nbytes])[0])
+        fval = float(_FLOAT_UNPACK[ai].unpack_from(data, pos)[0])
         pos += nbytes
         if self._canonical and float_min_ai(fval) != ai:
             raise CBORDecodeError("float is not in shortest form")
-        return fval, start, pos
+        return fval, pos
 
     def _open_container(
         self, pos: int, start: int, major: int, arg: int, frames: list[_Frame]
-    ) -> tuple[Any, int, int]:
+    ) -> tuple[Any, int]:
         # The claimed length only sizes the item budget, so nothing is
         # allocated up front, so forged counts fail at end of input.
         if major == 4:
             if arg == 0:
-                return [], start, pos
+                return [], pos
             if len(frames) >= self._max_depth:
                 raise CBORDecodeError(
                     f"maximum depth {self._max_depth} exceeded at offset {start}"
@@ -303,7 +387,7 @@ class CBORDecoder:
             frames.append(_Frame(_ARR, arg, start))
         elif major == 5:
             if arg == 0:
-                return {}, start, pos
+                return {}, pos
             if len(frames) >= self._max_depth:
                 raise CBORDecodeError(
                     f"maximum depth {self._max_depth} exceeded at offset {start}"
@@ -315,7 +399,7 @@ class CBORDecoder:
                     f"maximum depth {self._max_depth} exceeded at offset {start}"
                 )
             frames.append(_Frame(_TAG, 1, start, arg))
-        return _MISSING, start, pos
+        return _MISSING, pos
 
     def _decode_text(self, raw: bytes) -> str:
         try:
