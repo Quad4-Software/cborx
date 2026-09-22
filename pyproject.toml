@@ -97,11 +97,16 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S603"]
+"tests/fuzz_atheris.py" = ["E402"]
 "setup.py" = ["T201"]
 
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = "atheris"
+ignore_missing_imports = true
 
 [tool.bandit]
 exclude_dirs = ["tests"]

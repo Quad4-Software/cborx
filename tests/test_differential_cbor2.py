@@ -34,13 +34,14 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-import cbor2
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 import cborx
 from cborx import CBORSimpleValue, CBORTag, dumps, loads, undefined
+
+cbor2 = pytest.importorskip("cbor2", reason="differential oracle not installed")
 
 _FIXED_TZ = st.integers(-14 * 60, 14 * 60).map(lambda m: timezone(timedelta(minutes=m)))
 
@@ -570,7 +571,7 @@ def test_tag_hook_semantics_divergence() -> None:
     seen: list[int] = []
     wire_tag0 = cbor2.dumps(datetime(2020, 1, 1, tzinfo=timezone.utc))
 
-    def cbor2_hook(tag: cbor2.CBORTag, _immutable: bool) -> Any:
+    def cbor2_hook(tag: Any, _immutable: bool) -> Any:
         seen.append(tag.tag)
         return tag.value
 
