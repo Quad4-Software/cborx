@@ -93,3 +93,26 @@ def test_random_bytes_with_options() -> None:
                 data, canonical=True, duplicate_keys="error", allow_indefinite=False
             )
             _may_decode(data, strict_utf8=False)
+
+
+@pytest.mark.parametrize(
+    "wire",
+    [
+        # Regression: a map declaring 2**63 pairs overflowed the
+        # item counter to zero and crashed the compiled backend by
+        # reading past the items list. Found by test_bit_flip_fuzz.
+        bytes.fromhex(
+            "a6646e7473201bffffffffffffffff3bffffffffffffffff"
+            "c24940000000000000000066666c6f61747385fb0000000000"
+            "000000bb80000000000000006265404200ff"
+        ),
+        # An array of 2**64 - 1 items wrapped the counter to the
+        # indefinite sentinel value.
+        bytes.fromhex("9bffffffffffffffff01"),
+        bytes.fromhex("bbffffffffffffffff0102"),
+        bytes.fromhex("9b8000000000000000"),
+        bytes.fromhex("bb7fffffffffffffff"),
+    ],
+)
+def test_huge_container_counts(wire: bytes) -> None:
+    _may_decode(wire)

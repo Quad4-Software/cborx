@@ -575,6 +575,15 @@ def decode_item(object dec, object data, Py_ssize_t pos):  # noqa: C901
                             f"maximum depth {max_depth} exceeded "
                             f"at offset {start}")
                     else:
+                        # Each item needs at least one byte, so a count
+                        # beyond the input left can never complete.
+                        # Clamp instead of storing arg raw: 2**63 and
+                        # up would wrap long long into the indefinite
+                        # sentinel. Clamped to n - pos + 1 the counter
+                        # can never reach zero and decoding fails at
+                        # the same offset as the pure path.
+                        if arg > <uint64_t>(n - pos):
+                            arg = <uint64_t>(n - pos) + 1
                         frame = _FFrame(0, <long long>arg, start,
                                         parent=frame)
                         depth += 1
@@ -587,7 +596,12 @@ def decode_item(object dec, object data, Py_ssize_t pos):  # noqa: C901
                             f"maximum depth {max_depth} exceeded "
                             f"at offset {start}")
                     else:
-                        frame = _FFrame(1, <long long>arg * 2, start,
+                        # Pairs need at least two bytes. Clamping the
+                        # doubled item count keeps arg * 2 inside long
+                        # long while still never reaching zero.
+                        if arg > <uint64_t>(n - pos) // 2:
+                            arg = (<uint64_t>(n - pos) // 2) + 1
+                        frame = _FFrame(1, <long long>(arg * 2), start,
                                         parent=frame)
                         depth += 1
                         continue
