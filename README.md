@@ -11,7 +11,9 @@ CBOR (RFC 8949) encoder/decoder for Python. Zero runtime dependencies.
 A hardened, fully typed replacement for cbor2. Wheels ship an optional
 Cython accelerator that outperforms cbor2's native extension on encode
 and most decode workloads, and every install falls back to a portable
-pure-Python implementation with identical behavior. The decoder is
+pure-Python implementation with identical behavior. The accelerator
+is CPython-only, declares free-threading support, and stays off PyPy,
+where the JIT-optimized pure path is the right backend. The decoder is
 iterative, bounds every claimed length against the remaining input,
 and enforces a configurable nesting limit, so hostile input fails fast
 instead of exhausting memory or the call stack.

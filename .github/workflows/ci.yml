@@ -68,3 +68,145 @@ jobs:
 
       - name: Test pure-Python backend with coverage
         run: CBORX_DISABLE_FAST=1 uv run pytest --cov
+
+  asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - name: Build accelerator with sanitizers
+        run: >-
+          CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          LDFLAGS="-fsanitize=address,undefined"
+          uv run python setup.py build_ext --inplace
+
+      - name: Test under ASan and UBSan
+        run: >-
+          LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          ASAN_OPTIONS=detect_leaks=0
+          UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+          uv run pytest tests/test_fuzz.py tests/test_backends.py tests/test_leaks.py -x
+
+  freethreaded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+
+      - name: Install free-threaded Python
+        run: uv python install 3.14t
+
+      - name: Build accelerator in place
+        run: >-
+          uv run --no-project --python 3.14t
+          --with setuptools --with cython
+          python setup.py build_ext --inplace
+
+      - name: Verify GIL stays disabled
+        run: >-
+          PYTHONPATH=src uv run --no-project --python 3.14t
+          python -W error::RuntimeWarning
+          -c "import cborx; from cborx import _backend;
+          assert _backend.fast is not None;
+          import sys; assert not sys._is_gil_enabled()"
+
+      - name: Test full suite on free-threaded Python
+        run: >-
+          PYTHONPATH=src uv run --no-project --python 3.14t
+          --with pytest --with hypothesis --with cbor2
+          python -m pytest
+
+  sdist-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+
+      - run: uv build --sdist --out-dir dist
+
+      - name: Install sdist with a compiler
+        run: |
+          uv venv /tmp/withcc
+          uv pip install --no-cache \
+            --python /tmp/withcc/bin/python dist/cborx-*.tar.gz
+          /tmp/withcc/bin/python -c "
+          from cborx import _backend
+          assert _backend.fast is not None, 'accelerator missing'
+          import cborx
+          assert cborx.loads(cborx.dumps({'a': [1, 2.5]})) == {'a': [1, 2.5]}
+          "
+
+      - name: Install sdist without a compiler
+        run: |
+          uv venv /tmp/nocc
+          CC=/nonexistent-compiler uv pip install --no-cache \
+            --python /tmp/nocc/bin/python dist/cborx-*.tar.gz
+          /tmp/nocc/bin/python -c "
+          from cborx import _backend
+          assert _backend.fast is None, 'accelerator should not be present'
+          import cborx
+          assert cborx.loads(cborx.dumps({'a': [1, 2.5]})) == {'a': [1, 2.5]}
+          "
+
+  pypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+
+      - name: Install package and test deps on PyPy
+        run: |
+          uv venv --python pypy3.11 /tmp/pypyenv
+          uv pip install --python /tmp/pypyenv/bin/python \
+            -e . pytest hypothesis cbor2
+
+      - name: Verify pure backend selected
+        run: >-
+          /tmp/pypyenv/bin/python
+          -c "from cborx import _backend; assert _backend.fast is None"
+
+      - name: Test pure backend on PyPy
+        run: /tmp/pypyenv/bin/python -m pytest

@@ -61,11 +61,11 @@ jobs:
         env:
           CIBW_SKIP: "pp* *-win32 *-manylinux_i686"
           CIBW_ARCHS_MACOS: "x86_64 arm64"
+          CIBW_TEST_REQUIRES: "pytest hypothesis cbor2"
           CIBW_TEST_COMMAND: >-
-            python -c "import cborx;
-            from cborx import _backend;
-            assert _backend.fast is not None, 'accelerator missing';
-            assert cborx.loads(cborx.dumps({'a': 1})) == {'a': 1}"
+            python -c "from cborx import _backend;
+            assert _backend.fast is not None, 'accelerator missing'" &&
+            python -m pytest {project}/tests -x -q
         with:
           output-dir: wheelhouse
 

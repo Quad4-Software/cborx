@@ -1,0 +1,72 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "33 4 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  atheris:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+
+      - name: Build accelerator in place
+        run: >-
+          uv run --no-project --python 3.12
+          --with setuptools --with cython
+          python setup.py build_ext --inplace
+
+      - name: Seed corpus
+        run: |
+          mkdir -p corpus artifacts
+          uv run --no-project --python 3.12 python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          import cborx
+          samples = [
+              {"ints": [0, -1, 2**64 - 1, 2**70], "f": [1.5, float("nan")]},
+              ["a", "b", {"k": [1, [2, [3]]]}, b"\x00\xff"],
+              {"nested": {"deep": [[[[[]]]]]}},
+          ]
+          for i, obj in enumerate(samples):
+              for kw in ({}, {"canonical": True}, {"indefinite": True}):
+                  with open(f"corpus/seed{i}_{len(kw)}", "wb") as fh:
+                      fh.write(cborx.dumps(obj, **kw))
+          # Known adversarial shapes
+          open("corpus/reg_overflow_map", "wb").write(bytes.fromhex(
+              "a6646e7473201bffffffffffffffff3bffffffffffffffff"
+              "c24940000000000000000066666c6f61747385fb0000000000"
+              "000000bb80000000000000006265404200ff"))
+          open("corpus/reg_huge_array", "wb").write(
+              bytes.fromhex("9bffffffffffffffff01"))
+          open("corpus/reg_indefinite", "wb").write(
+              bytes.fromhex("9f018202039f0405ffff"))
+          PY
+
+      - name: Fuzz both backends
+        run: >-
+          uv run --no-project --python 3.12 --with atheris==3.1.0
+          python tests/fuzz_atheris.py corpus
+          -max_total_time=900 -rss_limit_mb=2048 -artifact_prefix=artifacts/
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fuzz-crashers
+          path: artifacts/
+          if-no-files-found: ignore
