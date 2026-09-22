@@ -14,14 +14,16 @@ def float_min_ai(value: float) -> int:
     """
     if math.isnan(value):
         return 25
-    try:
-        if struct.unpack(">e", struct.pack(">e", value))[0] == value:
-            return 25
-    except OverflowError:
-        pass
-    try:
-        if struct.unpack(">f", struct.pack(">f", value))[0] == value:
-            return 26
-    except OverflowError:
-        pass
+    if _fits(">e", value):
+        return 25
+    if _fits(">f", value):
+        return 26
     return 27
+
+
+def _fits(fmt: str, value: float) -> bool:
+    """True if value survives a round trip through format fmt."""
+    try:
+        return bool(struct.unpack(fmt, struct.pack(fmt, value))[0] == value)
+    except OverflowError:
+        return False
