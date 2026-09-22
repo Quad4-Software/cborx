@@ -16,9 +16,7 @@ import sys
 from typing import Any
 
 fast: Any = None
-if sys.implementation.name == "cpython" and not os.environ.get(
-    "CBORX_DISABLE_FAST"
-):
+if sys.implementation.name == "cpython" and not os.environ.get("CBORX_DISABLE_FAST"):
     try:
         from . import (  # type: ignore[attr-defined]
             _fast,  # ty: ignore[unresolved-import]
