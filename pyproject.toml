@@ -23,9 +23,9 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://quad4.io"
-Repository = "https://github.com/Quad4-Software/python-library-template"
-Issues = "https://github.com/Quad4-Software/python-library-template/issues"
-Changelog = "https://github.com/Quad4-Software/python-library-template/blob/master/CHANGELOG.md"
+Repository = "https://github.com/Quad4-Software/cborx"
+Issues = "https://github.com/Quad4-Software/cborx/issues"
+Changelog = "https://github.com/Quad4-Software/cborx/blob/master/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/cborx/__init__.py"
@@ -37,6 +37,7 @@ dev = [
     "ruff>=0.16.8",
     "bandit>=1.9.4",
     "mypy>=2.3.1",
+    "hypothesis>=6.168.0",
 ]
 
 [tool.ruff]
@@ -99,7 +100,7 @@ source = ["src/cborx"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 80
+fail_under = 90
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

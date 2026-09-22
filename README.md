@@ -1,38 +1,65 @@
-# python-library-template
+# cborx
 
-[![CI](https://github.com/Quad4-Software/python-library-template/actions/workflows/ci.yml/badge.svg)](https://github.com/Quad4-Software/python-library-template/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Quad4-Software/python-library-template/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Quad4-Software/python-library-template)
+[![CI](https://github.com/Quad4-Software/cborx/actions/workflows/ci.yml/badge.svg)](https://github.com/Quad4-Software/cborx/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Quad4-Software/cborx/actions/workflows/codeql.yml/badge.svg)](https://github.com/Quad4-Software/cborx/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Quad4-Software/cborx/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Quad4-Software/cborx)
+[![PyPI](https://img.shields.io/pypi/v/cborx)](https://pypi.org/project/cborx/)
 [![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue)](LICENSE)
 
-Quad4 template for dependency-free typed Python libraries.
+Pure-Python CBOR (RFC 8949) encoder/decoder. No dependencies, no Rust.
 
-## Contents
+A hardened, fully typed replacement for cbor2 without a native
+extension. The decoder is iterative, bounds every claimed length
+against the remaining input, and enforces a configurable nesting
+limit, so hostile input fails fast instead of exhausting memory or
+the call stack.
 
-- `src/` layout with Hatchling, dynamic version from `__init__.py`
-- Fully typed, `py.typed` shipped, mypy strict over `src` and `tests`
-- ruff lint + format, bandit, pytest
-- `make check` runs the full local gate
-- GitHub Actions: CI matrix 3.10-3.14, CodeQL, OpenSSF Scorecard with SARIF
-  upload, zizmor, dependency review, tag-triggered PyPI release with build
-  provenance and attestations
-- All actions pinned to commit SHAs, least-privilege permissions,
-  `step-security/harden-runner` on every job, Dependabot with 7-day cooldown
+## Install
 
-## Using this template
+```sh
+pip install cborx
+```
 
-1. Create a repository from this template (GitHub "Use this template" button)
-   or copy the tree.
-2. Rename the package:
+## Usage
 
-   ```sh
-   mv src/packagename src/mypkg
-   mv tests/test_packagename.py tests/test_mypkg.py
-   grep -rl packagename . | xargs sed -i 's/packagename/mypkg/g'
-   ```
+```python
+import cborx
 
-3. Update `pyproject.toml`: description, keywords, classifiers, repository URL.
-4. Update `SECURITY.md` if the contact address differs.
-5. For releases, configure a PyPI trusted publisher for the repository
-   (workflow `release.yml`, environment `pypi`), then tag `v*` to publish.
+data = cborx.dumps({"a": [1, 2, 3], "b": None})
+assert cborx.loads(data) == {"a": [1, 2, 3], "b": None}
 
-License: 0BSD.
+# Deterministic encoding: shortest-form integers and floats, map keys
+# sorted by encoded key bytes (RFC 8949 section 4.2).
+canonical = cborx.dumps({"b": 1, "a": 2}, canonical=True)
+
+# Strict canonical validation on decode, duplicate-key policy, depth
+# and indefinite-length controls.
+cborx.loads(data, canonical=True, duplicate_keys="error", max_depth=100)
+
+# Unhandled semantic tags round-trip as CBORTag. A tag_hook overrides
+# all built-in tag handling.
+cborx.loads(b"\xd8\x2a\x01", tag_hook=lambda decoder, tag: (tag.tag, tag.value))
+assert cborx.loads(cborx.dumps(cborx.CBORTag(42, "x"))) == cborx.CBORTag(42, "x")
+
+# A default callback handles otherwise unencodable objects, like cbor2.
+cborx.dumps(object(), default=lambda encoder, obj: {"type": type(obj).__name__})
+
+# Simple values and the undefined sentinel.
+assert cborx.loads(b"\xf7") is cborx.undefined
+assert cborx.loads(b"\xf0") == cborx.CBORSimpleValue(16)
+```
+
+Built-in semantic tags: 0 (ISO 8601 datetime), 1 (epoch datetime),
+2/3 (bignum integers beyond the 64-bit range), 32 (URI, decoded to a
+plain str since Python has no URI scalar), 1004 (calendar date) and
+55799 (self-described CBOR, passed through). All other tags decode to
+CBORTag. See RFC 8949: https://www.rfc-editor.org/rfc/rfc8949
+
+## Development
+
+```sh
+uv sync --group dev
+make check
+```
+
+License: 0BSD. Quad4 Software, https://quad4.io
