@@ -22,12 +22,17 @@ Deliberate scope differences, asserted rather than hidden:
 * cbor2 calls tag_hook only for tags without a built-in decoder and
   passes (tag, immutable). cborx calls tag_hook(decoder, tag) for
   every tag, overriding built-in handling.
+* cbor2 decodes tag 1 timestamps through the C runtime. On Windows
+  that rejects values before 1970 or after year 3000, so the
+  timestamp parity test generates datetimes inside that range there.
+  cborx uses epoch arithmetic and decodes the full range everywhere.
 """
 
 import contextlib
 import ipaddress
 import math
 import re
+import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -44,6 +49,19 @@ from cborx import CBORSimpleValue, CBORTag, dumps, loads, undefined
 cbor2 = pytest.importorskip("cbor2", reason="differential oracle not installed")
 
 _FIXED_TZ = st.integers(-14 * 60, 14 * 60).map(lambda m: timezone(timedelta(minutes=m)))
+
+# Range of tag 1 timestamps cbor2 can decode on the current platform.
+# On Windows its C decoder calls gmtime, which accepts only
+# 1970-01-01 through 3000-12-31 UTC. The bounds are padded by the
+# maximum _FIXED_TZ offset (14h) so the UTC timestamp stays in range.
+if sys.platform == "win32":
+    _TS_DATETIMES = st.datetimes(
+        min_value=datetime(1970, 1, 2),  # noqa: DTZ001  # bounds are naive
+        max_value=datetime(3000, 12, 30),  # noqa: DTZ001
+        timezones=_FIXED_TZ,
+    )
+else:
+    _TS_DATETIMES = st.datetimes(timezones=_FIXED_TZ)
 
 # Tags 28 and 29 carry shareable-reference semantics in cbor2 that
 # cborx does not implement, so they are excluded from generated
@@ -236,7 +254,7 @@ def test_encode_bytes_equal_canonical(obj: Any) -> None:
     assert dumps(obj, canonical=True) == cbor2.dumps(_to_cbor2(obj), canonical=True)
 
 
-@given(st.datetimes(timezones=_FIXED_TZ))
+@given(_TS_DATETIMES)
 @settings(max_examples=100)
 def test_datetime_as_timestamp_parity(dt: datetime) -> None:
     ours = dumps(dt, datetime_as_timestamp=True)

@@ -5,6 +5,9 @@
 - Tag 1 decoding no longer calls datetime.fromtimestamp, whose C
   library call rejects negative timestamps on Windows. Pre-epoch
   timestamps now decode everywhere via epoch arithmetic.
+- The cbor2 differential timestamp test generates datetimes within
+  cbor2's decodable range on Windows (1970 through year 3000 UTC),
+  where its C decoder is limited by the MSVC runtime.
 
 ## [0.2.3] - 2026-09-22
 
