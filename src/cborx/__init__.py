@@ -6,7 +6,7 @@ from .encoder import CBOREncoder, DefaultCallback, dump, dumps
 from .exceptions import CBORDecodeError, CBOREncodeError, CBORError
 from .types import CBORSimpleValue, CBORTag, UndefinedType, undefined
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 __all__ = [
     "CBORDecodeError",

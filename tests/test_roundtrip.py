@@ -4,11 +4,11 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from cborx import CBORSimpleValue, CBORTag, dumps, loads, undefined
-from tests.util import same
+from tests.util import encoded_keys_unique, same
 
 _BUILTIN_TAGS = {0, 1, 2, 3, 32, 100, 1004, 55799}
 
@@ -69,12 +69,14 @@ _PLAIN_TREES: st.SearchStrategy[Any] = st.recursive(
 @given(_TREES)
 @settings(max_examples=400, deadline=None)
 def test_round_trip(obj: Any) -> None:
+    assume(encoded_keys_unique(obj))
     assert same(loads(dumps(obj)), obj)
 
 
 @given(_TREES)
 @settings(max_examples=400, deadline=None)
 def test_canonical_round_trip(obj: Any) -> None:
+    assume(encoded_keys_unique(obj))
     encoded = dumps(obj, canonical=True)
     # Canonical output must satisfy strict canonical decoding.
     decoded = loads(encoded, canonical=True)
@@ -86,6 +88,7 @@ def test_canonical_round_trip(obj: Any) -> None:
 @given(_PLAIN_TREES)
 @settings(max_examples=300, deadline=None)
 def test_canonical_byte_fixpoint(obj: Any) -> None:
+    assume(encoded_keys_unique(obj))
     first = dumps(obj, canonical=True)
     second = dumps(loads(first), canonical=True)
     assert first == second

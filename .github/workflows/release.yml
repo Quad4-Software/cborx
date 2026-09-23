@@ -46,7 +46,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            cibw_skip: "pp* *-win32 *-manylinux_i686"
+          - os: ubuntu-24.04-arm
+            cibw_skip: "pp* *-win32 *-manylinux_i686"
+          - os: windows-latest
+            cibw_skip: "pp* *-win32 *-manylinux_i686"
+          - os: windows-11-arm
+            # CPython ARM64 Windows builds only exist for 3.11+.
+            cibw_skip: "pp* *-win32 *-manylinux_i686 cp310-*"
+            cibw_archs_windows: "ARM64"
+          - os: macos-latest
+            cibw_skip: "pp* *-win32 *-manylinux_i686"
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         if: runner.os == 'Linux'
@@ -59,8 +71,9 @@ jobs:
 
       - uses: pypa/cibuildwheel@e090b81e30c4d855ea63bf4b6e59204c09a101ae # v4.2.1
         env:
-          CIBW_SKIP: "pp* *-win32 *-manylinux_i686"
+          CIBW_SKIP: ${{ matrix.cibw_skip }}
           CIBW_ARCHS_MACOS: "x86_64 arm64"
+          CIBW_ARCHS_WINDOWS: ${{ matrix.cibw_archs_windows || 'auto' }}
           CIBW_TEST_REQUIRES: "pytest hypothesis"
           CIBW_TEST_COMMAND: >-
             python -c "from cborx import _backend;

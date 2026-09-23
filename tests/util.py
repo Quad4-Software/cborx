@@ -4,7 +4,7 @@
 import math
 from typing import Any
 
-from cborx import CBORTag
+from cborx import CBORTag, dumps
 
 
 def same(a: Any, b: Any) -> bool:
@@ -38,6 +38,32 @@ def same(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     return bool(a == b)
+
+
+def encoded_keys_unique(obj: Any) -> bool:
+    """False when some map in obj has keys that encode identically.
+
+    Distinct dict keys can share an encoding: two separate NaN objects
+    both encode to 0xf97e00. The decoded map collapses them to one
+    entry, and strict canonical decoding rejects duplicate keys
+    outright, so such objects cannot round trip.
+    """
+    stack = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            seen = set()
+            for key in cur:
+                encoded = dumps(key, canonical=True)
+                if encoded in seen:
+                    return False
+                seen.add(encoded)
+            stack.extend(cur.values())
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+        elif isinstance(cur, CBORTag):
+            stack.append(cur.value)
+    return True
 
 
 def depth(value: Any) -> int:

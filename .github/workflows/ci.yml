@@ -35,11 +35,21 @@ jobs:
       - run: uvx ty check src tests
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # Oldest and newest supported interpreters on the other
+          # platforms cborx ships wheels for.
+          - {os: windows-latest, python: "3.10"}
+          - {os: windows-latest, python: "3.14"}
+          - {os: macos-latest, python: "3.10"}
+          - {os: macos-latest, python: "3.14"}
+          - {os: ubuntu-24.04-arm, python: "3.10"}
+          - {os: ubuntu-24.04-arm, python: "3.14"}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -67,7 +77,9 @@ jobs:
         run: uv run pytest
 
       - name: Test pure-Python backend with coverage
-        run: CBORX_DISABLE_FAST=1 uv run pytest --cov
+        run: uv run pytest --cov
+        env:
+          CBORX_DISABLE_FAST: "1"
 
   asan:
     runs-on: ubuntu-latest

@@ -306,7 +306,10 @@ cdef int _write(object enc, object obj, _Arena a, int depth,
                                                         a.used - mark),
                               tmp))
                 a.used = mark
-            pairs.sort()
+            # Sort on (length, bytes) only: distinct keys can encode
+            # to identical bytes (two NaNs) and their values may be
+            # unorderable.
+            pairs.sort(key=lambda p: (p[0], p[1]))
             for pair in pairs:
                 a.write(PyBytes_AS_STRING(pair[1]), PyBytes_GET_SIZE(pair[1]))
                 _write(enc, pair[2], a, depth + 1, max_depth, flags)

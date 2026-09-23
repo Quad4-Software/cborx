@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.3] - 2026-09-22
+
+Fix a crash in the compiled encoder's canonical map handling and
+extend platform coverage.
+
+- Canonical encoding sorted (length, key bytes, value) tuples, so two
+  keys with identical encodings (distinct NaN objects) fell through to
+  comparing map values and raised TypeError for unorderable types.
+  The sort now uses (length, key bytes) only, matching the pure
+  encoder. Found by hypothesis during wheel testing.
+- Property tests now skip objects whose map keys collide under
+  canonical encoding: strict canonical decode rejects duplicate keys
+  in both backends, so such objects cannot round trip.
+- CI runs the test suite on Windows, macOS (arm64) and Linux aarch64
+  in addition to Linux x86_64.
+- Release wheels now cover Linux aarch64 and Windows ARM64.
+
 ## [0.2.2] - 2026-09-22
 
 Fix a stack overflow in the compiled encoder on Windows. When nesting
