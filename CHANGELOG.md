@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.2] - Unreleased
+## [0.2.0] - 2026-09-22
 
 Optional Cython accelerator, correctness fixes found by differential
 testing against cbor2, and a performance pass on the encoder and
