@@ -4,6 +4,7 @@
 import copy
 import io
 import math
+import sys
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -173,8 +174,17 @@ def test_encode_recursion_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     for _ in range(1500):
         nested = [nested]
     monkeypatch.setattr(backend, "fast", None)
-    with pytest.raises(CBOREncodeError):
-        dumps(nested, max_depth=10**6)
+    # Cap the recursion limit so RecursionError fires at a shallow
+    # depth. On Windows the default limit already exceeds what the 1MB
+    # C stack survives, so relying on it would crash the interpreter
+    # instead of raising.
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(300)
+    try:
+        with pytest.raises(CBOREncodeError):
+            dumps(nested, max_depth=10**6)
+    finally:
+        sys.setrecursionlimit(old_limit)
     monkeypatch.undo()
 
     if backend.fast is None:

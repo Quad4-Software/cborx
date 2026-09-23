@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1] - 2026-09-22
+
+Release pipeline fixes. No library changes.
+
+- Wheel testing no longer installs cbor2, which has no wheels for some
+  build targets and fails to build from source without a Rust
+  toolchain. Differential coverage still runs in CI on Linux.
+- The encoder recursion guard test caps the interpreter recursion
+  limit so RecursionError fires at a shallow depth. On Windows the
+  default limit already exceeds what the 1MB C stack survives, so the
+  test crashed the interpreter instead of raising.
+
 ## [0.2.0] - 2026-09-22
 
 Optional Cython accelerator, correctness fixes found by differential
