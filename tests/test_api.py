@@ -493,9 +493,9 @@ def test_encode_recursion_limit_maps_to_encode_error() -> None:
     for _ in range(5000):
         deep = [deep]
     enc = CBOREncoder(io.BytesIO(), max_depth=100000)
-    with pytest.raises(CBOREncodeError, match="too deep"):
+    with pytest.raises(CBOREncodeError, match=r"too deep|depth exceeded"):
         enc.encode(deep)
-    with pytest.raises(CBOREncodeError, match="too deep"):
+    with pytest.raises(CBOREncodeError, match=r"too deep|depth exceeded"):
         dumps(deep, max_depth=100000)
 
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.2] - 2026-09-22
+
+Fix a stack overflow in the compiled encoder on Windows. When nesting
+exceeded the internal C recursion cap, the remaining tail was
+delegated to the Python encoder, which recursed on top of thousands
+of retained C frames and exhausted the 1MB thread stack before
+RecursionError could fire. The cap is lowered to 2000 and delegation
+now fails fast: containers beyond the cap raise CBOREncodeError
+immediately, while scalar leaves at any depth still encode normally.
+
 ## [0.2.1] - 2026-09-22
 
 Release pipeline fixes. No library changes.

@@ -65,7 +65,11 @@ from cborx.types import CBORSimpleValue, undefined
 
 cdef int _CANON = 1
 cdef int _INDEF = 2
-cdef int _DEPTH_CAP = 4000  # beyond this, encode recurses in Python
+# Beyond this depth containers fail fast through the Python path.
+# The cap bounds C recursion within the smallest default thread stack
+# (Windows reserves 1MB), leaving headroom for the interpreter frames
+# already on it.
+cdef int _DEPTH_CAP = 2000
 cdef object _MISSING = object()
 
 
@@ -162,10 +166,12 @@ cdef int _write(object enc, object obj, _Arena a, int depth,
     if depth > max_depth:
         raise CBOREncodeError("maximum container depth exceeded")
     if depth > _DEPTH_CAP:
-        # Beyond this point C recursion could exhaust the call stack,
-        # so the deep tail runs through the Python path which maps
-        # RecursionError to CBOREncodeError.
-        return _delegate(enc, obj, a, depth)
+        # Delegating the tail at the real depth would recurse thousands
+        # of Python frames on top of the retained C frames and can
+        # exhaust the stack before RecursionError fires. Delegating at
+        # max_depth instead encodes scalar leaves normally but fails
+        # the next container with CBOREncodeError immediately.
+        return _delegate(enc, obj, a, max_depth)
 
     if PyLong_CheckExact(obj):
         ll = PyLong_AsLongLongAndOverflow(obj, &overflow)
