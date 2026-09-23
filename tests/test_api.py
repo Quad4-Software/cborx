@@ -357,6 +357,17 @@ def test_epoch_tag_rejects_bad_values() -> None:
         loads(bytes.fromhex("c1f5"))  # tag 1 wrapping true
 
 
+def test_epoch_tag_decodes_negative_timestamps() -> None:
+    # Pre-epoch timestamps hit a C library call that rejects negative
+    # time_t on Windows. Decoding must not depend on platform support.
+    assert loads(bytes.fromhex("c13a01e1337f")) == datetime(
+        1969, 1, 1, tzinfo=timezone.utc
+    )
+    assert loads(bytes.fromhex("c1fbbfe0000000000000")) == datetime(
+        1969, 12, 31, 23, 59, 59, 500000, tzinfo=timezone.utc
+    )
+
+
 def test_empty_and_nested_empty_containers() -> None:
     obj = {"e": [], "m": {}, "n": [[], [{}], {"x": []}]}
     assert loads(dumps(obj)) == obj

@@ -36,6 +36,7 @@ _FLOAT_UNPACK: dict[int, struct.Struct] = {25: _F16, 26: _F32, 27: _F64}
 _FLOAT_SIZES = {25: 2, 26: 4, 27: 8}
 _MINIMAL_ARG = {1: 24, 2: 0x100, 4: 0x10000, 8: 0x100000000}
 _EPOCH_DATE = date(1970, 1, 1)
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class _Frame:
@@ -474,7 +475,9 @@ def _decode_epoch(value: Any) -> datetime:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CBORDecodeError("tag 1 must wrap a number")
     try:
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        # Epoch arithmetic avoids fromtimestamp, whose C library call
+        # rejects negative timestamps on Windows.
+        return _EPOCH + timedelta(seconds=value)
     except (OverflowError, OSError, ValueError) as e:
         raise CBORDecodeError(f"tag 1 timestamp {value!r} out of range") from e
 

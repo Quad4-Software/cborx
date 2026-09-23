@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Tag 1 decoding no longer calls datetime.fromtimestamp, whose C
+  library call rejects negative timestamps on Windows. Pre-epoch
+  timestamps now decode everywhere via epoch arithmetic.
+
 ## [0.2.3] - 2026-09-22
 
 Fix a crash in the compiled encoder's canonical map handling and
