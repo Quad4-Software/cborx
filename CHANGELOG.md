@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.2.5] - 2026-09-24
+
+Fix a memory-safety bug in the compiled encoder and harden the codec
+against hostile object graphs and buffer tricks.
+
+- The Cython encoder iterated lists with a size captured before the
+  loop and unchecked PyList_GET_ITEM access. Any Python code running
+  during item encoding (a default callback, a str or int subclass
+  method, a CBORTag attribute lookup) could shrink the list and leave
+  the loop reading out of bounds into freed memory, crashing the
+  interpreter. Items are now fetched with the atomically bounds-checked
+  PyList_GetItemRef and any size change raises CBOREncodeError.
+- Dict encoding ran PyDict_Next without a critical section and without
+  a final consistency check, so a resize mid-encode could emit a
+  truncated map under a header claiming more pairs, or tear on
+  free-threaded builds. Dict iteration now runs under the object
+  critical section, checks the size before and after the loop, and
+  counts emitted pairs.
+- The pure-Python encoder emitted silently corrupt output when a list
+  or dict was resized mid-encode, and dict resizes surfaced as bare
+  RuntimeError. Both paths now raise CBOREncodeError, except canonical
+  maps, which snapshot keys up front and emit a consistent map.
+- duplicate_keys="error" could be bypassed with NaN keys: NaN never
+  compares equal, so repeated NaN keys were never detected. Keys that
+  cannot deduplicate by equality are now compared by their encoded
+  bytes in all duplicate modes.
+- Decoding a bytes subclass trusted its overridden __len__, __getitem__
+  and comparisons: a lying __len__ defeated the trailing-data check, a
+  mutable bytearray resized by a tag_hook did the same, and overridden
+  comparisons could bypass canonical key-order validation. Input is now
+  converted to an exact bytes object before decoding. This also fixes
+  the trailing-data check on memoryview objects whose itemsize is
+  greater than one byte, where len() counts elements rather than bytes.
+- canonical=True now rejects NaN encodings other than the preferred
+  0xf97e00, per RFC 8949 section 4.2.1.
+- A deeply nested CBORTag used as a map key could exceed the
+  interpreter recursion limit while hashing and leak RecursionError;
+  it now raises CBORDecodeError.
+- encoder.encode() called inside a default callback restarted the
+  depth budget at zero; it now continues at the enclosing depth, so
+  callbacks cannot exceed max_depth.
+- CBOREncoder now validates max_depth >= 1, matching CBORDecoder.
+- The tag 1004 error message for non-string non-integer values now
+  names both accepted forms.
+
 ## [0.2.4] - 2026-09-23
 
 Fix tag 1 datetime decoding on Windows.

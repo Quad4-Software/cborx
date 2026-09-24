@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: 0BSD
 """Hardened iterative CBOR decoder (RFC 8949)."""
 
+import math
 import struct
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -8,7 +9,7 @@ from functools import partial
 from typing import Any, BinaryIO, Literal
 
 from . import _backend
-from ._util import float_min_ai
+from ._util import _dedup_nan_keys, _nan_bearing, float_min_ai
 from .exceptions import CBORDecodeError
 from .types import CBORSimpleValue, CBORTag, undefined
 
@@ -42,7 +43,7 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 class _Frame:
     """One open container or tag on the decode work stack."""
 
-    __slots__ = ("items", "kind", "prev_key", "remaining", "start", "tag")
+    __slots__ = ("items", "kind", "nan_keys", "prev_key", "remaining", "start", "tag")
 
     def __init__(self, kind: int, remaining: int, start: int, tag: int = 0) -> None:
         self.kind = kind
@@ -51,6 +52,9 @@ class _Frame:
         self.tag = tag
         self.start = start
         self.prev_key: bytes | None = None
+        # (items index, encoded bytes) for keys whose equality cannot
+        # detect duplicates (NaN). Lazily allocated; almost always None.
+        self.nan_keys: list[tuple[int, bytes]] | None = None
 
 
 class CBORDecoder:
@@ -97,6 +101,12 @@ class CBORDecoder:
         Raises CBORDecodeError on trailing bytes unless allow_trailing is
         set.
         """
+        if type(data) is not bytes:
+            # Copy to an exact bytes object up front: len() and indexing
+            # on a subclass or a multi-byte memoryview are unreliable,
+            # and a mutable buffer could change under the trailing-data
+            # check below.
+            data = bytes(data)
         value, pos = self.decode_item(data, 0)
         if not allow_trailing and pos != len(data):
             raise CBORDecodeError(f"trailing data at offset {pos}")
@@ -111,7 +121,10 @@ class CBORDecoder:
             return result
         if pos < 0:
             raise CBORDecodeError("unexpected end of input")
-        if not isinstance(data, bytes):
+        if type(data) is not bytes:
+            # bytes subclasses may override __getitem__, .decode and the
+            # comparisons the canonical key-order check relies on, so
+            # decode always works on an exact bytes snapshot.
             data = bytes(data)
         n = len(data)
         frames: list[_Frame] = []
@@ -201,8 +214,16 @@ class CBORDecoder:
                     value = self._apply_tag(frame.tag, value)
                     start = frame.start
                     continue
-                if canonical and frame.kind == _MAP and not len(frame.items) % 2:
-                    self._check_key_order(data, frame, start, end)
+                if frame.kind == _MAP and not len(frame.items) % 2:
+                    if canonical:
+                        self._check_key_order(data, frame, start, end)
+                    elif _nan_bearing(value):
+                        # NaN keys never compare equal, so remember the
+                        # encoded bytes to catch true wire duplicates in
+                        # _finish.
+                        if frame.nan_keys is None:
+                            frame.nan_keys = []
+                        frame.nan_keys.append((len(frame.items), data[start:end]))
                 frame.items.append(value)
                 if frame.remaining > 0:
                     frame.remaining -= 1
@@ -383,8 +404,13 @@ class CBORDecoder:
             raise CBORDecodeError("truncated float")
         fval = float(_FLOAT_UNPACK[ai].unpack_from(data, pos)[0])
         pos += nbytes
-        if self._canonical and float_min_ai(fval) != ai:
-            raise CBORDecodeError("float is not in shortest form")
+        if self._canonical:
+            if math.isnan(fval):
+                # RFC 8949 section 4.2.1 prefers exactly 0xf97e00 for NaN.
+                if ai != 25 or data[pos - 2 : pos] != b"\x7e\x00":
+                    raise CBORDecodeError("NaN is not in preferred encoding")
+            elif float_min_ai(fval) != ai:
+                raise CBORDecodeError("float is not in shortest form")
         return fval, pos
 
     def _open_container(
@@ -426,23 +452,9 @@ class CBORDecoder:
         if frame.kind == _ARR:
             return frame.items
         items = frame.items
-        result: dict[Any, Any] = {}
-        try:
-            if self._duplicate_keys == "error":
-                for i in range(0, len(items), 2):
-                    key = items[i]
-                    if key in result:
-                        raise CBORDecodeError(f"duplicate map key {key!r}")
-                    result[key] = items[i + 1]
-            elif self._duplicate_keys == "first":
-                for i in range(0, len(items), 2):
-                    result.setdefault(items[i], items[i + 1])
-            else:
-                for i in range(0, len(items), 2):
-                    result[items[i]] = items[i + 1]
-        except TypeError as e:
-            raise CBORDecodeError("unhashable map key") from e
-        return result
+        if frame.nan_keys is not None:
+            items = _dedup_nan_keys(items, frame.nan_keys, self._duplicate_keys)
+        return _build_map(items, self._duplicate_keys)
 
     def _apply_tag(self, tag: int, value: Any) -> Any:
         if self._tag_hook is not None:
@@ -459,6 +471,29 @@ class CBORDecoder:
         if handler is not None:
             return handler(value)
         return CBORTag(tag, value)
+
+
+def _build_map(items: list[Any], duplicate_keys: str) -> dict[Any, Any]:
+    result: dict[Any, Any] = {}
+    try:
+        if duplicate_keys == "error":
+            for i in range(0, len(items), 2):
+                key = items[i]
+                if key in result:
+                    raise CBORDecodeError(f"duplicate map key {key!r}")
+                result[key] = items[i + 1]
+        elif duplicate_keys == "first":
+            for i in range(0, len(items), 2):
+                result.setdefault(items[i], items[i + 1])
+        else:
+            for i in range(0, len(items), 2):
+                result[items[i]] = items[i + 1]
+    except TypeError as e:
+        raise CBORDecodeError("unhashable map key") from e
+    except RecursionError as e:
+        # A deeply nested CBORTag key recurses in __hash__.
+        raise CBORDecodeError("map key too deeply nested to hash") from e
+    return result
 
 
 def _decode_datetime(value: Any) -> datetime:
@@ -496,7 +531,7 @@ def _decode_tag_date(value: Any) -> date:
         except ValueError as e:
             raise CBORDecodeError(f"malformed tag 1004 date string {value!r}") from e
     if isinstance(value, bool) or not isinstance(value, int):
-        raise CBORDecodeError("tag 1004 must wrap a text string")
+        raise CBORDecodeError("tag 1004 must wrap a text string or integer")
     try:
         return _EPOCH_DATE + timedelta(days=value)
     except OverflowError as e:

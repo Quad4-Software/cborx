@@ -28,6 +28,7 @@ from cpython.list cimport (
     PyList_CheckExact,
     PyList_GET_ITEM,
     PyList_GET_SIZE,
+    PyList_GetItemRef,
     PyList_New,
 )
 from cpython.long cimport (
@@ -59,12 +60,15 @@ cdef extern from "_fastshim.h":
     double PyFloat_Unpack4(const char *p, int le)
     double PyFloat_Unpack8(const char *p, int le)
 
-from cborx._util import float_min_ai
+cimport cython
+
+from cborx._util import _dedup_nan_keys, _nan_bearing, float_min_ai
 from cborx.exceptions import CBORDecodeError, CBOREncodeError
 from cborx.types import CBORSimpleValue, undefined
 
 cdef int _CANON = 1
 cdef int _INDEF = 2
+_DUP_MODES = ("last", "first", "error")
 # Beyond this depth containers fail fast through the Python path.
 # The cap bounds C recursion within the smallest default thread stack
 # (Windows reserves 1MB), leaving headroom for the interpreter frames
@@ -252,26 +256,49 @@ cdef int _write(object enc, object obj, _Arena a, int depth,
     if obj is None:
         return a.byte(0xF6)
 
-    if PyList_CheckExact(obj) or PyTuple_CheckExact(obj):
-        n = (PyList_GET_SIZE(obj) if PyList_CheckExact(obj)
-             else PyTuple_GET_SIZE(obj))
+    if PyTuple_CheckExact(obj):
+        # Tuples are immutable, so raw unchecked access stays safe even
+        # while encoding items runs arbitrary Python via _delegate.
+        n = PyTuple_GET_SIZE(obj)
         if flags & _INDEF:
             a.byte(0x9F)
             for i in range(n):
-                item = <object>(PyList_GET_ITEM(obj, i)
-                                if PyList_CheckExact(obj)
-                                else PyTuple_GET_ITEM(obj, i))
-                _write(enc, item, a, depth + 1, max_depth, flags)
+                _write(enc, <object>PyTuple_GET_ITEM(obj, i),
+                       a, depth + 1, max_depth, flags)
             return a.byte(0xFF)
         if n < 24:
             a.byte(0x80 | <unsigned char>n)
         else:
             _head(a, 4, <uint64_t>n)
         for i in range(n):
-            item = <object>(PyList_GET_ITEM(obj, i)
-                            if PyList_CheckExact(obj)
-                            else PyTuple_GET_ITEM(obj, i))
+            _write(enc, <object>PyTuple_GET_ITEM(obj, i),
+                   a, depth + 1, max_depth, flags)
+        return 0
+
+    if PyList_CheckExact(obj):
+        n = PyList_GET_SIZE(obj)
+        if flags & _INDEF:
+            a.byte(0x9F)
+        elif n < 24:
+            a.byte(0x80 | <unsigned char>n)
+        else:
+            _head(a, 4, <uint64_t>n)
+        # Item encoding can run Python code (default callbacks, str or
+        # int subclass methods) that shrinks the list, so every element
+        # is fetched with an atomic bounds-checked reference. On
+        # free-threaded builds PyList_GetItemRef is also safe against
+        # concurrent mutation.
+        for i in range(n):
+            try:
+                item = PyList_GetItemRef(obj, i)
+            except IndexError:
+                raise CBOREncodeError(
+                    "list mutated during encoding") from None
             _write(enc, item, a, depth + 1, max_depth, flags)
+        if PyList_GET_SIZE(obj) != n:
+            raise CBOREncodeError("list mutated during encoding")
+        if flags & _INDEF:
+            return a.byte(0xFF)
         return 0
 
     if PyDict_CheckExact(obj):
@@ -294,18 +321,23 @@ cdef int _write(object enc, object obj, _Arena a, int depth,
             # pairs in (length, bytes) order.
             pairs = []
             ppos = 0
-            while PyDict_Next(obj, &ppos, &k, &v):
-                if PyDict_Size(obj) != dsize:
-                    raise RuntimeError("dictionary changed size during iteration")
-                item = <object>k
-                tmp = <object>v
-                mark = a.used
-                _write(enc, item, a, depth + 1, max_depth, flags)
-                pairs.append((a.used - mark,
-                              PyBytes_FromStringAndSize(a.buf + mark,
-                                                        a.used - mark),
-                              tmp))
-                a.used = mark
+            with cython.critical_section(obj):
+                while PyDict_Next(obj, &ppos, &k, &v):
+                    if PyDict_Size(obj) != dsize:
+                        raise CBOREncodeError("map mutated during encoding")
+                    item = <object>k
+                    tmp = <object>v
+                    mark = a.used
+                    _write(enc, item, a, depth + 1, max_depth, flags)
+                    pairs.append((a.used - mark,
+                                  PyBytes_FromStringAndSize(a.buf + mark,
+                                                            a.used - mark),
+                                  tmp))
+                    a.used = mark
+            # PyDict_Next may silently stop early after a mutation, so
+            # verify the collected count against the claimed size.
+            if len(pairs) != dsize or PyDict_Size(obj) != dsize:
+                raise CBOREncodeError("map mutated during encoding")
             # Sort on (length, bytes) only: distinct keys can encode
             # to identical bytes (two NaNs) and their values may be
             # unorderable.
@@ -314,14 +346,19 @@ cdef int _write(object enc, object obj, _Arena a, int depth,
                 a.write(PyBytes_AS_STRING(pair[1]), PyBytes_GET_SIZE(pair[1]))
                 _write(enc, pair[2], a, depth + 1, max_depth, flags)
             return 0
+        pairs_written = 0
         ppos = 0
-        while PyDict_Next(obj, &ppos, &k, &v):
-            if PyDict_Size(obj) != dsize:
-                raise RuntimeError("dictionary changed size during iteration")
-            item = <object>k
-            tmp = <object>v
-            _write(enc, item, a, depth + 1, max_depth, flags)
-            _write(enc, tmp, a, depth + 1, max_depth, flags)
+        with cython.critical_section(obj):
+            while PyDict_Next(obj, &ppos, &k, &v):
+                if PyDict_Size(obj) != dsize:
+                    raise CBOREncodeError("map mutated during encoding")
+                item = <object>k
+                tmp = <object>v
+                _write(enc, item, a, depth + 1, max_depth, flags)
+                _write(enc, tmp, a, depth + 1, max_depth, flags)
+                pairs_written += 1
+        if pairs_written != dsize or PyDict_Size(obj) != dsize:
+            raise CBOREncodeError("map mutated during encoding")
         if flags & _INDEF:
             return a.byte(0xFF)
         return 0
@@ -358,6 +395,7 @@ cdef class _FFrame:
     cdef uint64_t tag
     cdef list items
     cdef object prev_key
+    cdef object nan_keys
     cdef _FFrame parent
 
     def __cinit__(self, int kind, long long remaining, Py_ssize_t start,
@@ -368,15 +406,21 @@ cdef class _FFrame:
         self.tag = tag
         self.items = []
         self.prev_key = None
+        self.nan_keys = None
         self.parent = parent
 
 
 cdef object _finish(_FFrame f, int dupmode):
     cdef list items = f.items
-    cdef Py_ssize_t i, m = PyList_GET_SIZE(items)
+    cdef Py_ssize_t i, m
     cdef object result, key
     if f.kind == 0:
         return items
+    if f.nan_keys is not None:
+        # NaN keys never compare equal, so wire-level duplicates were
+        # recorded by encoded bytes during decoding.
+        items = _dedup_nan_keys(items, f.nan_keys, _DUP_MODES[dupmode])
+    m = PyList_GET_SIZE(items)
     result = PyDict_New()
     try:
         if dupmode == 2:
@@ -393,6 +437,9 @@ cdef object _finish(_FFrame f, int dupmode):
                 result[items[i]] = items[i + 1]
     except TypeError as e:
         raise CBORDecodeError("unhashable map key") from e
+    except RecursionError as e:
+        # A deeply nested CBORTag key recurses in __hash__.
+        raise CBORDecodeError("map key too deeply nested to hash") from e
     return result
 
 
@@ -531,9 +578,17 @@ def decode_item(object dec, object data, Py_ssize_t pos):  # noqa: C901
                     else:
                         d = PyFloat_Unpack8(<const char *>b + pos, 0)
                     pos += m
-                    if canonical and float_min_ai(d) != ai:
-                        raise CBORDecodeError(
-                            "float is not in shortest form")
+                    if canonical:
+                        if isnan(d):
+                            # RFC 8949 section 4.2.1 prefers exactly
+                            # 0xf97e00 for NaN.
+                            if (ai != 25 or b[pos - 2] != 0x7E
+                                    or b[pos - 1] != 0x00):
+                                raise CBORDecodeError(
+                                    "NaN is not in preferred encoding")
+                        elif float_min_ai(d) != ai:
+                            raise CBORDecodeError(
+                                "float is not in shortest form")
                     value = PyFloat_FromDouble(d)
             else:
                 # Definite-length item with an integer argument.
@@ -634,12 +689,21 @@ def decode_item(object dec, object data, Py_ssize_t pos):  # noqa: C901
                 value = apply_tag(top.tag, value)
                 start = top.start
                 continue
-            if canonical and frame.kind == 1 and not len(frame.items) % 2:
-                key = data[start:pos]
-                prev = frame.prev_key
-                if prev is not None and (len(key), key) <= (len(prev), prev):
-                    raise CBORDecodeError("map keys are not in canonical order")
-                frame.prev_key = key
+            if frame.kind == 1 and not len(frame.items) % 2:
+                if canonical:
+                    key = data[start:pos]
+                    prev = frame.prev_key
+                    if prev is not None and (len(key), key) <= (len(prev), prev):
+                        raise CBORDecodeError(
+                            "map keys are not in canonical order")
+                    frame.prev_key = key
+                elif _nan_bearing(value):
+                    # NaN keys never compare equal; record the encoded
+                    # bytes so _finish can detect wire-level duplicates.
+                    if frame.nan_keys is None:
+                        frame.nan_keys = []
+                    frame.nan_keys.append(
+                        (PyList_GET_SIZE(frame.items), data[start:pos]))
             PyList_Append(frame.items, value)
             if frame.remaining > 0:
                 frame.remaining -= 1

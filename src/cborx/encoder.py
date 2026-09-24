@@ -31,6 +31,18 @@ def _to_bignum(value: int) -> bytes:
     return value.to_bytes((value.bit_length() + 7) // 8, "big")
 
 
+def _map_items(obj: dict[Any, Any]) -> Any:
+    """Yield dict items, converting resize RuntimeError to CBOREncodeError.
+
+    A default callback or subclass method can resize the dict being
+    encoded; the items() iterator then raises RuntimeError mid-loop.
+    """
+    try:
+        yield from obj.items()
+    except RuntimeError as e:
+        raise CBOREncodeError("map mutated during encoding") from e
+
+
 class CBOREncoder:
     """Encode Python objects to a binary stream as CBOR."""
 
@@ -46,6 +58,8 @@ class CBOREncoder:
     ) -> None:
         if canonical and indefinite:
             raise ValueError("canonical and indefinite encoding are mutually exclusive")
+        if max_depth < 1:
+            raise ValueError("max_depth must be at least 1")
         self._fp = fp
         self._canonical = canonical
         self._indefinite = indefinite
@@ -53,14 +67,17 @@ class CBOREncoder:
         self._default = default
         self._max_depth = max_depth
         self._active: bytearray | None = None
+        self._active_depth = 0
 
     def encode(self, obj: Any) -> None:
         """Write obj to the stream as a single CBOR data item."""
         active = self._active
         if active is not None:
             # Nested call from a default callback: append in place so the
-            # substituted bytes land at the correct position.
-            self._write_item(obj, active, 0)
+            # substituted bytes land at the correct position. The depth
+            # budget carries over from the enclosing item instead of
+            # resetting, so callbacks cannot exceed max_depth.
+            self._write_item(obj, active, self._active_depth)
             return
         fast = _backend.fast
         try:
@@ -270,45 +287,67 @@ class CBOREncoder:
     ) -> None:
         write_item = self._write_item
         child = depth + 1
+        n = len(obj)
         if self._indefinite:
             buf.append(0x9F)
             for item in obj:
                 write_item(item, buf, child)
             buf.append(0xFF)
-            return
-        n = len(obj)
-        if n < 24:
-            buf.append(0x80 | n)
         else:
-            self._write_head(buf, 4, n)
-        for item in obj:
-            write_item(item, buf, child)
+            if n < 24:
+                buf.append(0x80 | n)
+            else:
+                self._write_head(buf, 4, n)
+            for item in obj:
+                write_item(item, buf, child)
+        # A mutation mid-encode (a default callback or subclass method
+        # shrinking or growing the sequence) would otherwise emit a
+        # truncated or overlong body under the already-written count.
+        if len(obj) != n:
+            raise CBOREncodeError("array mutated during encoding")
 
     def _write_map(self, obj: dict[Any, Any], buf: bytearray, depth: int) -> None:
         write_item = self._write_item
         child = depth + 1
+        n = len(obj)
         if self._indefinite:
             buf.append(0xBF)
-            for key, value in obj.items():
+            for key, value in _map_items(obj):
                 write_item(key, buf, child)
                 write_item(value, buf, child)
             buf.append(0xFF)
-            return
-        n = len(obj)
-        if n < 24:
-            buf.append(0xA0 | n)
-        else:
-            self._write_head(buf, 5, n)
-        if self._canonical:
-            pairs = [(self._key_bytes(key, depth), value) for key, value in obj.items()]
+        elif self._canonical:
+            if n < 24:
+                buf.append(0xA0 | n)
+            else:
+                self._write_head(buf, 5, n)
+            pairs = [
+                (self._key_bytes(key, depth), value) for key, value in _map_items(obj)
+            ]
+            # Keys are snapshotted, so mutation during value writes
+            # cannot corrupt the output; a resized dict can only leave
+            # a short or stale snapshot, which this catches.
+            if len(pairs) != n or len(obj) != n:
+                raise CBOREncodeError("map mutated during encoding")
             pairs.sort(key=lambda pair: (len(pair[0]), pair[0]))
             for key_bytes, value in pairs:
                 buf += key_bytes
                 write_item(value, buf, child)
+            return
         else:
-            for key, value in obj.items():
+            if n < 24:
+                buf.append(0xA0 | n)
+            else:
+                self._write_head(buf, 5, n)
+            for key, value in _map_items(obj):
                 write_item(key, buf, child)
                 write_item(value, buf, child)
+        # Same guard as _write_array: a mutated dict would emit the
+        # wrong pair count under the already-written map header. The
+        # dict_items iterator also raises RuntimeError on resize, which
+        # _map_items converts to CBOREncodeError.
+        if len(obj) != n:
+            raise CBOREncodeError("map mutated during encoding")
 
     def _key_bytes(self, key: Any, depth: int) -> bytes:
         buf = bytearray()
@@ -320,11 +359,14 @@ class CBOREncoder:
             raise CBOREncodeError(f"cannot encode object of type {type(obj).__name__}")
         before = len(buf)
         prev = self._active
+        prev_depth = self._active_depth
         self._active = buf
+        self._active_depth = depth
         try:
             substitute = self._default(self, obj)
         finally:
             self._active = prev
+            self._active_depth = prev_depth
         wrote = len(buf) != before
         if substitute is None:
             if not wrote:

@@ -2,10 +2,21 @@
 """Handcrafted hostile inputs: the decoder is an attack surface."""
 
 import math
+from typing import Any, cast
 
 import pytest
 
-from cborx import CBORDecodeError, CBORSimpleValue, dumps, loads, undefined
+import cborx
+from cborx import (
+    CBORDecodeError,
+    CBOREncodeError,
+    CBOREncoder,
+    CBORSimpleValue,
+    DuplicateMode,
+    dumps,
+    loads,
+    undefined,
+)
 from tests.util import depth
 
 
@@ -283,3 +294,247 @@ def test_extended_simple_named_values() -> None:
     assert loads(b"\xf8\x16") is None
     assert loads(b"\xf8\x17") is undefined
     assert loads(b"\xf8\x20") == CBORSimpleValue(32)
+
+
+# Mutation during encode: item encoding can run Python code mid-loop
+# (a default callback or a subclass method), so a mutated container
+# must raise CBOREncodeError rather than crash the extension or emit
+# a stream whose item count disagrees with its header.
+
+
+class _ClearsList:
+    pass
+
+
+def test_list_cleared_during_encode() -> None:
+    items: list[object] = [_ClearsList(), 1, 2]
+
+    def default(_enc: CBOREncoder, _obj: object) -> int:
+        items.clear()
+        return 0
+
+    with pytest.raises(CBOREncodeError):
+        dumps(items, default=default)
+
+
+def test_list_grown_during_encode() -> None:
+    items: list[object] = [_ClearsList()]
+
+    def default(_enc: CBOREncoder, _obj: object) -> int:
+        items.extend([9, 9])
+        return 0
+
+    with pytest.raises(CBOREncodeError):
+        dumps(items, default=default)
+
+
+def test_list_shrunk_during_encode() -> None:
+    items: list[object] = [_ClearsList(), 1, 2]
+
+    def default(_enc: CBOREncoder, _obj: object) -> int:
+        del items[1:]
+        return 0
+
+    with pytest.raises(CBOREncodeError):
+        dumps(items, default=default)
+
+
+def test_list_mutation_via_subclass_encode() -> None:
+    # No default callback involved: the str subclass itself runs Python.
+    items: list[object] = []
+
+    class SneakyStr(str):
+        __slots__ = ()
+
+        def encode(self, *args: object, **kwargs: object) -> bytes:
+            items.clear()
+            return b"x"
+
+    items.extend([SneakyStr("x"), 1, 2])
+    with pytest.raises(CBOREncodeError):
+        dumps(items)
+
+
+def test_map_shrunk_during_encode() -> None:
+    for kwargs in ({}, {"indefinite": True}):
+        m: dict[object, object] = {1: _ClearsList(), 2: "x", 3: "y"}
+
+        def default(
+            _enc: CBOREncoder,
+            _obj: object,
+            _m: dict[object, object] = m,
+        ) -> int:
+            del _m[2]
+            del _m[3]
+            return 0
+
+        with pytest.raises(CBOREncodeError):
+            dumps(m, default=default, **cast(Any, kwargs))
+
+
+def test_canonical_map_encode_snapshots_keys() -> None:
+    # Canonical mode collects all pairs before encoding values, so a
+    # mutation triggered while writing a value cannot corrupt the
+    # stream: the output is the consistent pre-mutation map.
+    m: dict[object, object] = {1: _ClearsList(), 2: "x", 3: "y"}
+
+    def default(_enc: CBOREncoder, _obj: object) -> int:
+        del m[2]
+        del m[3]
+        return 0
+
+    encoded = dumps(m, default=default, canonical=True)
+    assert loads(encoded) == {1: 0, 2: "x", 3: "y"}
+
+
+def test_map_key_encoding_mutation() -> None:
+    for kwargs in ({}, {"canonical": True}):
+        m: dict[object, object] = {}
+
+        class SneakyKey(str):
+            __slots__ = ()
+
+            def encode(
+                self,
+                *args: object,
+                _m: dict[object, object] = m,
+                **kw: object,
+            ) -> bytes:
+                _m.clear()
+                return b"k"
+
+        m[SneakyKey("k")] = "v"
+        m[2] = "w"
+        with pytest.raises(CBOREncodeError):
+            dumps(m, **cast(Any, kwargs))
+
+
+def test_nested_encode_respects_max_depth() -> None:
+    # encode() inside a default callback inherits the depth budget
+    # instead of restarting at zero.
+    deep: object = 0
+    for _ in range(150):
+        deep = [deep]
+
+    def default(enc: CBOREncoder, _obj: object) -> None:
+        enc.encode(deep)
+
+    with pytest.raises(CBOREncodeError):
+        dumps([_ClearsList()], default=default, max_depth=10)
+
+
+@pytest.mark.parametrize("bad_depth", [0, -1, -100])
+def test_encoder_max_depth_validated(bad_depth: int) -> None:
+    with pytest.raises(ValueError, match="max_depth"):
+        dumps(5, max_depth=bad_depth)
+
+
+def test_bytes_subclass_len_cannot_hide_trailing() -> None:
+    class LyingLen(bytes):
+        def __len__(self) -> int:
+            return 1
+
+    with pytest.raises(CBORDecodeError):
+        loads(LyingLen(b"\x01\x02\x03"))
+
+
+def test_bytes_subclass_getitem_not_used() -> None:
+    class LyingGet(bytes):
+        def __getitem__(self, i: Any) -> Any:
+            if isinstance(i, slice):
+                return bytes(self)[i]
+            return 0x00
+
+    # Must decode the real bytes, not the overridden accessor.
+    assert loads(LyingGet(b"\x9f\x9f\x9f\xff\xff\xff")) == [[[]]]
+
+
+def test_bytes_subclass_cannot_skip_canonical_key_order() -> None:
+    class EvilBytes(bytes):
+        def __getitem__(self, i: Any) -> Any:
+            r = bytes(self)[i]
+            return EvilBytes(r) if isinstance(i, slice) else r
+
+        def __lt__(self, other: object) -> bool:
+            return False
+
+        def __le__(self, other: object) -> bool:
+            return False
+
+    bad = EvilBytes(bytes.fromhex("a2026162016161"))
+    with pytest.raises(CBORDecodeError):
+        loads(bad, canonical=True)
+
+
+def test_multibyte_memoryview_trailing_check() -> None:
+    # len() on an "i"-format view counts elements, not bytes; decoding
+    # must still count bytes.
+    mv = memoryview(b"\x01\x00\x00\x00").cast("i")
+    with pytest.raises(CBORDecodeError):
+        loads(mv)
+    mv2 = memoryview(b"\x01\x00\x00\x00").cast("i")
+    assert loads(mv2, allow_trailing=True) == 1
+
+
+def test_bytearray_mutation_during_decode() -> None:
+    ba = bytearray(bytes.fromhex("d903e7") + b"\x01" + b"AAAAA")
+
+    def hook(_dec: cborx.CBORDecoder, tag: cborx.CBORTag) -> Any:
+        del ba[4:]
+        return tag.value
+
+    with pytest.raises(CBORDecodeError):
+        loads(ba, tag_hook=hook)
+
+
+def test_nan_duplicate_keys_error() -> None:
+    # Two byte-identical NaN keys are true wire duplicates.
+    data = _evil("a2" + "f97e00" + "01" + "f97e00" + "02")
+    with pytest.raises(CBORDecodeError):
+        loads(data, duplicate_keys="error")
+
+
+def test_nan_duplicate_keys_last_and_first() -> None:
+    data = _evil("a2" + "f97e00" + "01" + "f97e00" + "02")
+    for mode_, want in (("last", 2), ("first", 1)):
+        mode = cast(DuplicateMode, mode_)
+        result = loads(data, duplicate_keys=mode)
+        assert len(result) == 1
+        assert next(iter(result.values())) == want
+
+
+def test_nan_keys_with_distinct_encodings_not_duplicates() -> None:
+    # f97e00 and fb7ff8000000000000 are different wire keys even though
+    # both decode to NaN.
+    data = _evil("a2" + "f97e00" + "01" + "fb7ff8000000000000" + "02")
+    result = loads(data, duplicate_keys="error")
+    assert len(result) == 2
+
+
+def test_nan_tag_wrapped_key_duplicate() -> None:
+    data = _evil("a2" + "d82a" + "f97e00" + "01" + "d82a" + "f97e00" + "02")
+    with pytest.raises(CBORDecodeError):
+        loads(data, duplicate_keys="error")
+    result = loads(data, duplicate_keys="last")
+    assert len(result) == 1
+
+
+def test_canonical_rejects_nonpreferred_nan() -> None:
+    for hexs in (
+        "f97e01",
+        "f9fe00",
+        "f9ffff",
+        "fa7fc00000",
+        "fb7ff8000000000000",
+    ):
+        with pytest.raises(CBORDecodeError):
+            loads(bytes.fromhex(hexs), canonical=True)
+    assert math.isnan(loads(b"\xf9\x7e\x00", canonical=True))
+
+
+def test_deeply_nested_tag_key_raises_decode_error() -> None:
+    # Hashing a nested CBORTag key recurses; past the interpreter limit
+    # the decoder must surface CBORDecodeError, not RecursionError.
+    data = b"\xa1" + b"\xd8\x63" * 1500 + b"\x01" + b"\x02"
+    with pytest.raises(CBORDecodeError):
+        loads(data, max_depth=2000)
