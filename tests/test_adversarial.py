@@ -2,6 +2,7 @@
 """Handcrafted hostile inputs: the decoder is an attack surface."""
 
 import math
+import sys
 from typing import Any, cast
 
 import pytest
@@ -503,6 +504,10 @@ def test_nan_duplicate_keys_last_and_first() -> None:
         assert next(iter(result.values())) == want
 
 
+@pytest.mark.skipif(
+    sys.implementation.name != "cpython",
+    reason="PyPy interns NaN, so dict identity lookup dedupes these keys",
+)
 def test_nan_keys_with_distinct_encodings_not_duplicates() -> None:
     # f97e00 and fb7ff8000000000000 are different wire keys even though
     # both decode to NaN.
