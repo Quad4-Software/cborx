@@ -25,6 +25,7 @@ Homepage = "https://quad4.io"
 Repository = "https://github.com/Quad4-Software/cborx"
 Issues = "https://github.com/Quad4-Software/cborx/issues"
 Changelog = "https://github.com/Quad4-Software/cborx/blob/master/CHANGELOG.md"
+Documentation = "https://quad4-software.github.io/cborx/"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -49,6 +50,9 @@ dev = [
     "cbor2>=6.1.4,<7",
     "cython>=3.3.0",
     "setuptools>=68",
+]
+docs = [
+    "zensical>=0.0.65",
 ]
 
 [tool.ruff]

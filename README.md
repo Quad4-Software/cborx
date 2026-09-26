@@ -4,6 +4,7 @@
 [![CodeQL](https://github.com/Quad4-Software/cborx/actions/workflows/codeql.yml/badge.svg)](https://github.com/Quad4-Software/cborx/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Quad4-Software/cborx/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Quad4-Software/cborx)
 [![PyPI](https://img.shields.io/pypi/v/cborx)](https://pypi.org/project/cborx/)
+[![Docs](https://img.shields.io/badge/docs-quad4--software.github.io%2Fcborx-blue)](https://quad4-software.github.io/cborx/)
 [![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue)](LICENSE)
 
 CBOR (RFC 8949) encoder/decoder for Python. Zero runtime dependencies.
