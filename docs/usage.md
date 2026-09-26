@@ -53,7 +53,7 @@ A callback that both writes and returns a value raises
 the first item.
 
 ```python
-value = cborx.loads(b"\xa1aa\x01")          # {"a": 1}
+value = cborx.loads(b"\xa1aa\x01")  # {"a": 1}
 value = cborx.load(open("out.cbor", "rb"))
 ```
 

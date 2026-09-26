@@ -27,7 +27,7 @@ jobs:
       - name: Build accelerator in place
         run: >-
           uv run --no-project --python 3.12
-          --with setuptools --with cython
+          --with setuptools --with "packaging>=24.2" --with cython
           python setup.py build_ext --inplace
 
       - name: Seed corpus
