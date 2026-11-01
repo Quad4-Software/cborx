@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.6] - 2026-10-31
+
+Maintenance release: development dependency refresh, CI action bumps,
+and test updates for cbor2 6.1.5 behavior.
+
+- Refreshed development dependencies: pytest 9.2.0, ruff 0.17.3,
+  mypy 2.4.1, hypothesis 6.168.5, cbor2 6.1.5, zensical 0.0.67, and
+  setuptools 84.2.1, which fixes GHSA-xmj3-9gf7-h52w.
+- Bumped pinned GitHub Actions: upload-artifact v7.0.1,
+  download-artifact v8.0.1, codeql-action v4.38.2, harden-runner
+  v2.22.3, setup-uv v10.3.3, scorecard-action v2.5.0, zizmor-action
+  v0.8.0, cibuildwheel v4.3.5, and gh-action-pypi-publish.
+- Updated differential tests to pin cbor2 6.1.5 behavior, which
+  rejects naive-datetime tag 0 strings and bare break bytes.
+
 ## [0.2.5] - 2026-09-24
 
 Fix a memory-safety bug in the compiled encoder and harden the codec

@@ -14,7 +14,6 @@ from .exceptions import CBOREncodeError
 from .types import CBORSimpleValue, CBORTag, UndefinedType, undefined
 
 _UINT64_MAX = (1 << 64) - 1
-_EPOCH_DATE = date(1970, 1, 1)
 _PACK_F16 = struct.Struct(">Be")
 _PACK_F32 = struct.Struct(">Bf")
 _PACK_F64 = struct.Struct(">Bd")

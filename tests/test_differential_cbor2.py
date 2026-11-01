@@ -43,8 +43,19 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-import cborx
-from cborx import CBORSimpleValue, CBORTag, dumps, loads, undefined
+from cborx import (
+    CBORDecodeError,
+    CBORDecoder,
+    CBOREncodeError,
+    CBOREncoder,
+    CBORError,
+    CBORSimpleValue,
+    CBORTag,
+    UndefinedType,
+    dumps,
+    loads,
+    undefined,
+)
 
 cbor2 = pytest.importorskip("cbor2", reason="differential oracle not installed")
 
@@ -105,11 +116,11 @@ _TREES: st.SearchStrategy[Any] = st.recursive(
 
 def _to_cbor2(obj: Any) -> Any:
     """Convert cborx-side values into their cbor2 equivalents."""
-    if isinstance(obj, cborx.CBORTag):
+    if isinstance(obj, CBORTag):
         return cbor2.CBORTag(obj.tag, _to_cbor2(obj.value))
-    if isinstance(obj, cborx.CBORSimpleValue):
+    if isinstance(obj, CBORSimpleValue):
         return cbor2.CBORSimpleValue(obj.value)
-    if isinstance(obj, cborx.UndefinedType):
+    if isinstance(obj, UndefinedType):
         return cbor2.undefined
     if isinstance(obj, dict):
         return {_to_cbor2(k): _to_cbor2(v) for k, v in obj.items()}
@@ -152,14 +163,14 @@ def _norm_semantic(obj: Any) -> Any:
 
 def _norm_taglike(obj: Any) -> Any:
     """Normalize tag, simple and undefined wrappers from either library."""
-    if isinstance(obj, (cborx.CBORTag, cbor2.CBORTag)):
+    if isinstance(obj, (CBORTag, cbor2.CBORTag)):
         if obj.tag == 258 and isinstance(obj.value, (list, tuple)):
             # Tag 258 content is a set: order is not meaningful.
             return ("tag", 258, frozenset(_norm(v) for v in obj.value))
         return ("tag", obj.tag, _norm(obj.value))
-    if isinstance(obj, (cborx.CBORSimpleValue, cbor2.CBORSimpleValue)):
+    if isinstance(obj, (CBORSimpleValue, cbor2.CBORSimpleValue)):
         return ("simple", obj.value)
-    if isinstance(obj, (cborx.UndefinedType, type(cbor2.undefined))):
+    if isinstance(obj, (UndefinedType, type(cbor2.undefined))):
         return ("undefined",)
     return _UNKNOWN
 
@@ -317,7 +328,7 @@ def _mutated_cbor(draw: Any) -> bytes:
     encoder = draw(
         st.sampled_from(
             [
-                lambda o: dumps(o),
+                dumps,
                 lambda o: dumps(o, canonical=True),
                 lambda o: dumps(o, indefinite=True),
                 lambda o: cbor2.dumps(_to_cbor2(o)),
@@ -390,11 +401,11 @@ def _wire_tags(data: bytes) -> set[int]:
     """Collect the tag numbers present on the wire via a tag_hook tap."""
     seen: set[int] = set()
 
-    def tap(_dec: cborx.CBORDecoder, tag: CBORTag) -> Any:
+    def tap(_dec: CBORDecoder, tag: CBORTag) -> Any:
         seen.add(tag.tag)
         return tag
 
-    with contextlib.suppress(cborx.CBORError):
+    with contextlib.suppress(CBORError):
         loads(data, allow_trailing=True, tag_hook=tap)
     return seen
 
@@ -419,7 +430,7 @@ def _only_cbor2_ok(data: bytes, theirs: Any) -> None:
         return
     if _has_break_sentinel(theirs):
         return
-    with pytest.raises(cborx.CBORDecodeError, match="unhashable"):
+    with pytest.raises(CBORDecodeError, match="unhashable"):
         loads(data, allow_trailing=True)
 
 
@@ -435,9 +446,8 @@ def _assert_decode_agreement(data: bytes) -> None:
         theirs_err = ""
     try:
         ours = loads(data, allow_trailing=True)
-    except cborx.CBORError:
+    except CBORError:
         ours_ok = False
-        ours = None
     else:
         ours_ok = True
 
@@ -519,7 +529,7 @@ def test_date_tag_error_parity() -> None:
 def test_default_callback_matches_cbor2_native_encoding() -> None:
     """cborx's default hook can emit byte-identical semantic encodings."""
 
-    def default(_encoder: cborx.CBOREncoder, obj: Any) -> Any:
+    def default(_encoder: CBOREncoder, obj: Any) -> Any:
         if isinstance(obj, Fraction):
             return CBORTag(30, [obj.numerator, obj.denominator])
         if isinstance(obj, Decimal):
@@ -528,7 +538,7 @@ def test_default_callback_matches_cbor2_native_encoding() -> None:
             return CBORTag(4, [int(t.exponent), -mantissa if t.sign else mantissa])
         if isinstance(obj, uuid.UUID):
             return CBORTag(37, obj.bytes)
-        raise cborx.CBOREncodeError(f"cannot encode {type(obj).__name__}")
+        raise CBOREncodeError(f"cannot encode {type(obj).__name__}")
 
     for obj in (Fraction(22, 7), Decimal("-1.5"), uuid.uuid5(uuid.NAMESPACE_DNS, "x")):
         ours = dumps(obj, default=default)
@@ -551,7 +561,7 @@ def test_shareable_reference_divergence() -> None:
 def test_unhashable_key_divergence() -> None:
     wire = cbor2.dumps({(1, 2): 3})
     assert cbor2.loads(wire) == {(1, 2): 3}
-    with pytest.raises(cborx.CBORDecodeError):
+    with pytest.raises(CBORDecodeError):
         loads(wire)
 
 
@@ -560,26 +570,27 @@ def test_naive_datetime_divergence() -> None:
     with pytest.raises(cbor2.CBOREncodeError):
         cbor2.dumps(naive)
     ours = dumps(naive)
-    assert cbor2.loads(ours) == naive
+    assert loads(ours) == naive
+    with pytest.raises(cbor2.CBORDecodeError):
+        cbor2.loads(ours)
 
 
 def test_trailing_bytes_divergence() -> None:
     wire = dumps(1) + dumps(2)
     assert cbor2.loads(wire) == 1
-    with pytest.raises(cborx.CBORDecodeError):
+    with pytest.raises(CBORDecodeError):
         loads(wire)
     assert loads(wire, allow_trailing=True) == 1
 
 
 def test_stray_break_divergence() -> None:
-    # cbor2 surfaces a bare break byte as an opaque marker object and
-    # even accepts it as a map key. cborx rejects it per RFC 8949.
-    marker = cbor2.loads(b"\xff")
-    assert type(marker) is object
-    with pytest.raises(cborx.CBORDecodeError):
-        loads(b"\xff")
-    with pytest.raises(cborx.CBORDecodeError):
-        loads(bytes.fromhex("a1ff01"))
+    # Both codecs reject a bare break byte per RFC 8949. Older cbor2
+    # releases surfaced it as an opaque marker object instead.
+    for wire in (b"\xff", bytes.fromhex("a1ff01")):
+        with pytest.raises(CBORDecodeError):
+            loads(wire)
+        with pytest.raises(cbor2.CBORDecodeError):
+            cbor2.loads(wire)
 
 
 def test_tag_hook_semantics_divergence() -> None:
@@ -598,7 +609,7 @@ def test_tag_hook_semantics_divergence() -> None:
 
     seen2: list[int] = []
 
-    def cborx_hook(_dec: cborx.CBORDecoder, tag: CBORTag) -> Any:
+    def cborx_hook(_dec: CBORDecoder, tag: CBORTag) -> Any:
         seen2.append(tag.tag)
         return tag.value
 
@@ -628,7 +639,7 @@ def test_encode_error_parity() -> None:
     class Widget:
         pass
 
-    with pytest.raises(cborx.CBOREncodeError):
+    with pytest.raises(CBOREncodeError):
         dumps(Widget())
     with pytest.raises(cbor2.CBOREncodeError):
         cbor2.dumps(Widget())
@@ -642,7 +653,7 @@ def test_decode_error_type_parity() -> None:
         b"\xa1\x01",  # odd map item count
     ]
     for data in bad_inputs:
-        with pytest.raises(cborx.CBORDecodeError):
+        with pytest.raises(CBORDecodeError):
             loads(data)
         with pytest.raises(cbor2.CBORDecodeError):
             cbor2.loads(data)

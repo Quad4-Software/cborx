@@ -41,18 +41,18 @@ cborx = ["py.typed", "_fast.pyx", "_fastshim.h"]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.8",
+    "ruff>=0.17.3",
     "bandit>=1.9.4",
-    "mypy>=2.3.1",
-    "hypothesis>=6.168.0",
-    "cbor2>=6.1.4,<7",
+    "mypy>=2.4.1",
+    "hypothesis>=6.168.5",
+    "cbor2>=6.1.5,<7",
     "cython>=3.3.0",
     "setuptools>=68",
 ]
 docs = [
-    "zensical>=0.0.65",
+    "zensical>=0.0.67",
 ]
 
 [tool.ruff]

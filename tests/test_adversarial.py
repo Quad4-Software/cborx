@@ -7,12 +7,13 @@ from typing import Any, cast
 
 import pytest
 
-import cborx
 from cborx import (
     CBORDecodeError,
+    CBORDecoder,
     CBOREncodeError,
     CBOREncoder,
     CBORSimpleValue,
+    CBORTag,
     DuplicateMode,
     dumps,
     loads,
@@ -480,7 +481,7 @@ def test_multibyte_memoryview_trailing_check() -> None:
 def test_bytearray_mutation_during_decode() -> None:
     ba = bytearray(bytes.fromhex("d903e7") + b"\x01" + b"AAAAA")
 
-    def hook(_dec: cborx.CBORDecoder, tag: cborx.CBORTag) -> Any:
+    def hook(_dec: CBORDecoder, tag: CBORTag) -> Any:
         del ba[4:]
         return tag.value
 

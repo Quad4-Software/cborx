@@ -22,8 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))  # for util.py
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 with atheris.instrument_imports():
-    import cborx
-    from cborx import CBORDecodeError, _backend
+    from cborx import CBORDecodeError, _backend, loads
     from util import (  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
         same,
     )
@@ -44,7 +43,7 @@ def _decode_both(data: bytes, opts: dict[str, Any]) -> None:
     for backend in (fast, None):
         _backend.fast = backend
         try:
-            results.append((cborx.loads(data, **opts), None))
+            results.append((loads(data, **opts), None))
         except CBORDecodeError as e:
             results.append((None, e))
         finally:

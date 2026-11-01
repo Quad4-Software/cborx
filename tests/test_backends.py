@@ -14,8 +14,15 @@ from typing import Any
 
 import pytest
 
-import cborx
-from cborx import _backend
+from cborx import (
+    CBORDecodeError,
+    CBORSimpleValue,
+    CBORTag,
+    _backend,
+    dumps,
+    loads,
+    undefined,
+)
 from cborx.decoder import CBORDecoder
 from cborx.encoder import CBOREncoder
 
@@ -33,12 +40,12 @@ VALUES: list[Any] = [
     True, False, None,
     [], [1, "a", b"b", 2.5, None, True],
     {}, {"a": 1, "b": [1, 2], 3: "c"},
-    cborx.CBORTag(0, "2024-01-01T00:00:00Z"),
-    cborx.CBORTag(1, 1700000000),
-    cborx.CBORTag(42, [1, 2]),
-    cborx.CBORSimpleValue(0),
-    cborx.CBORSimpleValue(255),
-    cborx.undefined,
+    CBORTag(0, "2024-01-01T00:00:00Z"),
+    CBORTag(1, 1700000000),
+    CBORTag(42, [1, 2]),
+    CBORSimpleValue(0),
+    CBORSimpleValue(255),
+    undefined,
     datetime(2024, 6, 1, 12, 30, 45, tzinfo=timezone.utc),
     datetime(2024, 6, 1, 12, 30, 45),  # noqa: DTZ001
     date(2024, 6, 1),
@@ -104,22 +111,20 @@ def _pure_decode(data: Any, **kwargs: Any) -> Any:
 @pytest.mark.parametrize("canonical", [False, True])
 @skip_no_fast
 def test_encode_parity(obj: Any, canonical: bool) -> None:
-    assert cborx.dumps(obj, canonical=canonical) == _pure_dumps(
-        obj, canonical=canonical
-    )
+    assert dumps(obj, canonical=canonical) == _pure_dumps(obj, canonical=canonical)
 
 
 @pytest.mark.parametrize("obj", VALUES, ids=repr)
 @skip_no_fast
 def test_encode_parity_indefinite(obj: Any) -> None:
-    assert cborx.dumps(obj, indefinite=True) == _pure_dumps(obj, indefinite=True)
+    assert dumps(obj, indefinite=True) == _pure_dumps(obj, indefinite=True)
 
 
 @pytest.mark.parametrize("obj", VALUES, ids=repr)
 @skip_no_fast
 def test_roundtrip_parity(obj: Any) -> None:
-    encoded = cborx.dumps(obj)
-    fast_val = cborx.loads(encoded)
+    encoded = dumps(obj)
+    fast_val = loads(encoded)
     pure_val = _pure_decode(encoded)
     assert _same(fast_val, pure_val), (fast_val, pure_val)
 
@@ -128,14 +133,14 @@ def test_roundtrip_parity(obj: Any) -> None:
 @skip_no_fast
 def test_decode_parity(wire: bytes) -> None:
     try:
-        fast_val = cborx.loads(wire)
+        fast_val = loads(wire)
         fast_err = None
-    except cborx.CBORDecodeError as e:
+    except CBORDecodeError as e:
         fast_val, fast_err = None, e
     try:
         pure_val = _pure_decode(wire)
         pure_err = None
-    except cborx.CBORDecodeError as e:
+    except CBORDecodeError as e:
         pure_val, pure_err = None, e
     assert (fast_err is None) == (pure_err is None), wire.hex()
     if fast_err is None:
@@ -147,7 +152,7 @@ def test_decode_parity(wire: bytes) -> None:
 
 @skip_no_fast
 def test_decode_options_parity() -> None:
-    wire = cborx.dumps({"b": 1, "a": 2})
+    wire = dumps({"b": 1, "a": 2})
     option_sets: tuple[dict[str, Any], ...] = (
         {"canonical": True},
         {"duplicate_keys": "first"},
@@ -160,7 +165,7 @@ def test_decode_options_parity() -> None:
     for kwargs in option_sets:
         for data in (wire, b"\x9f\x01\x02\xff", b"\xc8\x01", b"\xff"):
             try:
-                fast_val = cborx.loads(data, **kwargs)
+                fast_val = loads(data, **kwargs)
                 fast_err = None
             except Exception as e:  # noqa: BLE001
                 fast_val, fast_err = None, e
@@ -179,8 +184,8 @@ def test_decode_options_parity() -> None:
 
 @skip_no_fast
 def test_decode_pos_and_trailing_parity() -> None:
-    data = cborx.dumps([1]) + cborx.dumps([2])
-    assert cborx.loads(data, allow_trailing=True) == [1]
+    data = dumps([1]) + dumps([2])
+    assert loads(data, allow_trailing=True) == [1]
     saved = _backend.fast
     _backend.fast = None
     try:
@@ -188,14 +193,14 @@ def test_decode_pos_and_trailing_parity() -> None:
     finally:
         _backend.fast = saved
     assert CBORDecoder().decode_item(data, 2) == ([2], 4)
-    with pytest.raises(cborx.CBORDecodeError):
-        cborx.loads(data)
-    with pytest.raises(cborx.CBORDecodeError):
+    with pytest.raises(CBORDecodeError):
+        loads(data)
+    with pytest.raises(CBORDecodeError):
         CBORDecoder().decode_item(data, -1)
     saved = _backend.fast
     _backend.fast = None
     try:
-        with pytest.raises(cborx.CBORDecodeError):
+        with pytest.raises(CBORDecodeError):
             CBORDecoder().decode_item(data, -1)
     finally:
         _backend.fast = saved
